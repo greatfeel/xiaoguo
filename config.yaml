@@ -1,0 +1,25 @@
+# RSS News Fetcher Configuration
+
+# Anthropic API Configuration
+# 注意：可以从环境变量读取，或在此处直接配置
+ANTHROPIC_MODEL: "MiniMax-M2.5"
+ANTHROPIC_BASE_URL: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
+ANTHROPIC_AUTH_TOKEN: "${ANTHROPIC_API_KEY}"  # 支持从环境变量读取
+
+# RSS Sources
+SOURCES:
+  kagi:
+    science: "https://news.kagi.com/science.xml"
+    tech: "https://news.kagi.com/tech.xml"
+  idaily:
+    url: "https://plink.anyfeeder.com/idaily/today"
+
+# Output Directory
+OUTPUT_DIR: "news"
+
+# Date Format
+DATE_FORMAT: "%Y-%m-%d"
+
+# HTTP Settings
+TIMEOUT: 30
+MAX_RETRIES: 3

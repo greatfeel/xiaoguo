@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="format-detection" content="telephone=no">
+    <title>热点新闻 - 小果</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            -webkit-overflow-scrolling: touch;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            overscroll-behavior: contain;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            padding-bottom: calc(60px + env(safe-area-inset-bottom));
+        }
+        /* 顶部导航 */
+        .navbar {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: white;
+            padding: 14px 16px;
+            padding-top: max(14px, env(safe-area-inset-top));
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+            /* Safari 修复：确保 sticky 生效 */
+            -webkit-position: sticky;
+        }
+        .navbar a {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .navbar .title {
+            flex: 1;
+            text-align: center;
+            font-size: 17px;
+            font-weight: 600;
+            margin-right: 40px;
+        }
+        /* 日期条 */
+        .date-bar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+            padding: 12px 16px;
+            padding-top: max(12px, env(safe-area-inset-top));
+            font-size: 15px;
+            font-weight: 500;
+            position: sticky;
+            top: 49px;
+            z-index: 90;
+            /* Safari 修复 */
+            -webkit-position: sticky;
+        }
+        /* 分类条 */
+        .category-bar {
+            background: white;
+            padding: 10px 16px;
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            border-left: 4px solid;
+            margin: 16px 12px 8px;
+            border-radius: 0 8px 8px 0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+            /* Safari 触摸优化 */
+            -webkit-appearance: none;
+        }
+        .category-bar.science { border-color: #2ecc71; }
+        .category-bar.tech { border-color: #3498db; }
+        .category-bar.idaily { border-color: #e74c3c; }
+        /* 新闻卡片 */
+        .news-card {
+            background: white;
+            margin: 8px 12px;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+        }
+        .news-card h3 {
+            font-size: 16px;
+            line-height: 1.5;
+            color: #222;
+            margin-bottom: 8px;
+        }
+        .news-card .summary {
+            font-size: 14px;
+            line-height: 1.7;
+            color: #555;
+        }
+        .news-card .summary p { margin-bottom: 0.8em; }
+        .news-card .summary p:last-child { margin-bottom: 0; }
+        .news-card .summary h3 { font-size: 14px; margin-top: 0.8em; }
+        .news-card .summary ul, .news-card .summary ol {
+            padding-left: 1.5em;
+            margin: 0.5em 0;
+        }
+        .news-card .summary li {
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 4px;
+        }
+        .news-card .summary a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .news-card .meta {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 10px;
+        }
+        .news-card .meta a {
+            font-size: 12px;
+            color: #667eea;
+            text-decoration: none;
+        }
+        /* 展开收起 */
+        .news-card .summary.collapsed {
+            max-height: 100px;
+            overflow: hidden;
+            position: relative;
+        }
+        .news-card .summary.collapsed::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 40px;
+            background: linear-gradient(transparent, white);
+        }
+        .toggle-btn {
+            display: block;
+            width: 100%;
+            text-align: center;
+            padding: 12px 6px;
+            font-size: 13px;
+            color: #667eea;
+            background: none;
+            border: none;
+            cursor: pointer;
+            margin-top: 4px;
+            /* Safari 触摸优化 */
+            -webkit-appearance: none;
+            -webkit-tap-highlight-color: rgba(102, 126, 234, 0.1);
+            border-radius: 8px;
+        }
+        .toggle-btn:active {
+            background: rgba(102, 126, 234, 0.05);
+        }
+        /* 加载状态 */
+        .loading {
+            text-align: center;
+            padding: 30px;
+            color: #999;
+            font-size: 14px;
+        }
+        .loading .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #e9ecef;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .end-message {
+            text-align: center;
+            padding: 30px;
+            color: #aaa;
+            font-size: 14px;
+        }
+        .empty-category {
+            text-align: center;
+            padding: 16px;
+            color: #bbb;
+            font-size: 13px;
+            margin: 0 12px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/">← 返回</a>
+        <span class="title">热点新闻</span>
+    </nav>
+    <div id="news-container"></div>
+    <div id="loading" class="loading" style="display:none;">
+        <span class="spinner"></span>加载中...
+    </div>
+    <div id="end-message" class="end-message" style="display:none;">
+        没有更多新闻了
+    </div>
+
+    <script>
+        const container = document.getElementById('news-container');
+        const loadingEl = document.getElementById('loading');
+        const endEl = document.getElementById('end-message');
+
+        let allDates = [];
+        let currentDateIndex = 0;
+        let isLoading = false;
+        let allLoaded = false;
+
+        /**
+         * 安全地设置元素的 HTML 内容（使用 DOMPurify 清理）
+         */
+        function safeSetHTML(el, html) {
+            el.innerHTML = DOMPurify.sanitize(html, {
+                ALLOWED_TAGS: ['p', 'a', 'h2', 'h3', 'h4', 'ul', 'ol', 'li',
+                               'strong', 'em', 'br', 'img', 'blockquote', 'pre', 'code'],
+                ALLOWED_ATTR: ['href', 'target', 'rel', 'src', 'alt'],
+            });
+        }
+
+        // 初始化：获取可用日期列表
+        async function init() {
+            try {
+                const res = await fetch('/api/dates');
+                const data = await res.json();
+                allDates = data.dates;
+                if (allDates.length === 0) {
+                    endEl.style.display = 'block';
+                    endEl.textContent = '暂无新闻';
+                    return;
+                }
+                await loadNextDay();
+                setupInfiniteScroll();
+            } catch (err) {
+                container.textContent = '加载失败，请刷新重试';
+            }
+        }
+
+        // 加载下一天的新闻
+        async function loadNextDay() {
+            if (isLoading || allLoaded) return;
+            if (currentDateIndex >= allDates.length) {
+                allLoaded = true;
+                endEl.style.display = 'block';
+                return;
+            }
+
+            isLoading = true;
+            loadingEl.style.display = 'block';
+
+            const date = allDates[currentDateIndex];
+            try {
+                const res = await fetch('/api/news/' + encodeURIComponent(date));
+                const data = await res.json();
+                renderDay(data);
+                currentDateIndex++;
+            } catch (err) {
+                console.error('加载新闻失败:', err);
+            } finally {
+                isLoading = false;
+                loadingEl.style.display = 'none';
+            }
+        }
+
+        // 渲染一天的新闻
+        function renderDay(data) {
+            const dayEl = document.createElement('div');
+            dayEl.className = 'day-section';
+
+            // 日期条
+            const dateBar = document.createElement('div');
+            dateBar.className = 'date-bar';
+            dateBar.textContent = '📅 ' + data.date;
+            dayEl.appendChild(dateBar);
+
+            // 科学新闻
+            renderCategory(dayEl, 'science', '🔬 科学', data.science);
+            // 技术新闻
+            renderCategory(dayEl, 'tech', '💻 技术', data.tech);
+            // 热点新闻（iDaily）
+            renderCategory(dayEl, 'idaily', '🔥 热点', data.idaily);
+
+            container.appendChild(dayEl);
+        }
+
+        // 渲染一个分类
+        function renderCategory(parent, cls, label, articles) {
+            const bar = document.createElement('div');
+            bar.className = 'category-bar ' + cls;
+            bar.textContent = label;
+            parent.appendChild(bar);
+
+            if (!articles || articles.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-category';
+                empty.textContent = '暂无内容';
+                parent.appendChild(empty);
+                return;
+            }
+
+            for (const article of articles) {
+                const card = document.createElement('div');
+                card.className = 'news-card';
+
+                // 标题
+                const titleEl = document.createElement('h3');
+                titleEl.textContent = article.title;
+                card.appendChild(titleEl);
+
+                // 内容
+                const summaryEl = document.createElement('div');
+                summaryEl.className = 'summary';
+                const needCollapse = article.content.length > 300;
+                if (needCollapse) {
+                    summaryEl.classList.add('collapsed');
+                }
+                safeSetHTML(summaryEl, article.content);
+                card.appendChild(summaryEl);
+
+                // 展开/收起按钮
+                if (needCollapse) {
+                    const toggleBtn = document.createElement('button');
+                    toggleBtn.className = 'toggle-btn';
+                    toggleBtn.textContent = '展开全文';
+                    toggleBtn.addEventListener('click', () => {
+                        const isCollapsed = summaryEl.classList.contains('collapsed');
+                        summaryEl.classList.toggle('collapsed');
+                        toggleBtn.textContent = isCollapsed ? '收起' : '展开全文';
+                    });
+                    card.appendChild(toggleBtn);
+                }
+
+                // 原文链接
+                if (article.link) {
+                    const meta = document.createElement('div');
+                    meta.className = 'meta';
+                    const link = document.createElement('a');
+                    link.href = article.link;
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    link.textContent = '查看原文 →';
+                    meta.appendChild(link);
+                    card.appendChild(meta);
+                }
+
+                parent.appendChild(card);
+            }
+        }
+
+        // 无限滚动：Intersection Observer
+        function setupInfiniteScroll() {
+            const sentinel = document.createElement('div');
+            sentinel.id = 'scroll-sentinel';
+            sentinel.style.height = '1px';
+            document.body.appendChild(sentinel);
+
+            const observer = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting && !isLoading && !allLoaded) {
+                    loadNextDay();
+                }
+            }, { rootMargin: '200px' });
+
+            observer.observe(sentinel);
+        }
+
+        init();
+    </script>
+</body>
+</html>
