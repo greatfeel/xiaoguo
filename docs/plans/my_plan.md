@@ -14,3 +14,6 @@
 
 ## 后端抓取的修改
 - 抓取kagi新闻的存储日期（即放入对应的文件目录）按照<lastBuildDate>Mon, 09 Mar 2026 12:03:24 +0000</lastBuildDate>，而不是<pubDate>Sun, 08 Mar 2026 23:40:00 +0000</pubDate>
+
+# 2026-03-10-01
+## 如果环境变量中没有ANTHROPIC_API_KEY，从.env文件中读取

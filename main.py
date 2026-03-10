@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List
 import yaml
+from dotenv import load_dotenv
 
 from fetcher import RSSFetcher
 from translator import Translator
@@ -149,6 +150,9 @@ def main():
     # 设置日志
     setup_logging(args.verbose)
     logger = logging.getLogger(__name__)
+
+    # 从 .env 文件加载环境变量（不覆盖已有的环境变量）
+    load_dotenv()
 
     # 加载配置
     config = load_config(args.config)

@@ -65,8 +65,7 @@ mkdir -p /Users/edy/greatfeel/dev/projects/xiaoguome/logs
 ```bash
 #!/bin/bash
 cd /Users/edy/greatfeel/dev/projects/xiaoguome
-source .env 2>/dev/null
-/usr/bin/python3 main.py --config config.yaml >> logs/news_fetcher.log 2>&1
+.venv/bin/python main.py --config config.yaml >> logs/news_fetcher.log 2>&1 
 ```
 
 添加执行权限：
