@@ -142,6 +142,18 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/calendar")
+def calendar_page():
+    """高考日历页面：嵌入 Outlook 日历。"""
+    return render_template("calendar.html")
+
+
+@app.route("/tasks")
+def tasks_page():
+    """我的任务页面：嵌入 Notion 任务清单。"""
+    return render_template("tasks.html")
+
+
 @app.route("/news")
 def news_page():
     """热点新闻页面。"""

@@ -17,3 +17,11 @@
 
 # 2026-03-10-01
 ## 如果环境变量中没有ANTHROPIC_API_KEY，从.env文件中读取
+
+# 2026-03-10-02
+在网站首页构建一个新的入口菜单，高考日历，点击进去将下面的日历（来源 outlook）嵌入在页面中
+https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b3ff-bb52-4509-a9a2-c84ec7381e5b/cid-FF1DD0E83EAD4EF6/index.html
+
+# 2026-03-10-03
+在网站首页构建一个新的入口菜单，我的任务，点击进去将下面的代码嵌入在页面中
+<iframe src="https://therapeutic-torta-faf.notion.site/ebd//31f19d94caea80b1a1ede06d82b1b7ac?v=31f19d94caea806bbaef000c73687047" width="100%" height="600" frameborder="0" allowfullscreen />
