@@ -51,10 +51,23 @@
         .calendar-container {
             flex: 1;
             padding: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .calendar-help {
+            padding: 12px 16px;
+            background: #fff3cd;
+            border-bottom: 1px solid #ffc107;
+            font-size: 13px;
+            color: #856404;
+            text-align: center;
+        }
+        .calendar-help a {
+            color: #004085;
+            text-decoration: underline;
         }
         .calendar-container iframe {
-            width: 100%;
-            height: calc(100vh - 52px - env(safe-area-inset-top));
+            flex: 1;
             border: none;
         }
     </style>
@@ -64,10 +77,14 @@
         <a href="/">← 返回</a>
         <div class="title">📅 高考日历</div>
     </div>
+    <div class="calendar-help">
+        若 iframe 加载失败，可<a href="https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b3ff-bb52-4509-a9a2-c84ec7381e5b/cid-FF1DD0E83EAD4EF6/index.html" target="_blank">在新窗口打开日历</a>
+    </div>
     <div class="calendar-container">
         <iframe
             src="https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b3ff-bb52-4509-a9a2-c84ec7381e5b/cid-FF1DD0E83EAD4EF6/index.html"
-            allowfullscreen>
+            allowfullscreen
+            allow="accelerometer; ambient-light-sensor; autoplay; battery; camera; display-capture; document-domain; encrypted-media; execution-while-not-rendered; execution-while-out-of-viewport; fullscreen; geolocation; gyroscope; magnetometer; microphone; midi; navigation-override; payment; picture-in-picture; publickey-credentials-get; sync-xhr; usb; xr-spatial-tracking">
         </iframe>
     </div>
 </body>
