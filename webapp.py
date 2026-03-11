@@ -6,6 +6,7 @@
 import os
 import re
 import json
+import asyncio
 import sqlite3
 import logging
 import random
@@ -15,7 +16,12 @@ from typing import Optional
 import yaml
 from dotenv import load_dotenv
 
-from flask import Flask, jsonify, render_template, abort, redirect, request
+from flask import Flask, jsonify, render_template, abort, redirect, request, Response
+
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
 
 from translator import Translator
 from saver import HTMLSaver
@@ -33,6 +39,7 @@ CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 # 作文题目文件路径
 ESSAY_XLS_PATH = Path(__file__).parent / "高考作文题目汇总.xls"
+ESSAY_JSON_PATH = Path(__file__).parent / "高考作文题目汇总.json"
 
 
 def _load_config() -> dict:
@@ -103,6 +110,76 @@ def _get_translator() -> Optional[Translator]:
         logger.warning("翻译器初始化失败，将跳过英文补全: %s", exc)
         _TRANSLATOR_INIT_FAILED = True
         return None
+
+
+def _normalize_tts_text(text: str) -> str:
+    """清理 TTS 文本，减少噪声朗读。"""
+    if not text:
+        return ""
+
+    cleaned = re.sub(r"<[^>]+>", " ", text)
+    cleaned = re.sub(r"https?://\S+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+async def _synthesize_edge_tts(text: str, lang: str) -> bytes:
+    """调用 Edge TTS 生成音频字节。"""
+    voice = APP_CONFIG.get(
+        "EDGE_TTS_VOICE_EN" if lang == "en" else "EDGE_TTS_VOICE_ZH",
+        "en-US-EmmaMultilingualNeural" if lang == "en" else "zh-CN-XiaoxiaoNeural",
+    )
+    rate = APP_CONFIG.get(
+        "EDGE_TTS_RATE_EN" if lang == "en" else "EDGE_TTS_RATE_ZH",
+        "-15%" if lang == "en" else "-8%",
+    )
+
+    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
+    chunks = []
+    async for chunk in communicate.stream():
+        if chunk.get("type") == "audio":
+            chunks.append(chunk.get("data", b""))
+    return b"".join(chunks)
+
+
+def _resolve_tts_profile(lang: str, style: str) -> tuple[str, str]:
+    """根据语言与风格选择 voice/rate。"""
+    style = (style or "standard").lower()
+    if style not in ["standard", "gentle", "broadcast"]:
+        style = "standard"
+
+    # 默认 voice 与速率配置
+    if lang == "en":
+        style_defaults = {
+            "standard": ("en-US-EmmaMultilingualNeural", "-15%"),
+            "gentle": ("en-US-JennyNeural", "-25%"),
+            "broadcast": ("en-US-GuyNeural", "-10%"),
+        }
+    else:
+        style_defaults = {
+            "standard": ("zh-CN-XiaoxiaoNeural", "-8%"),
+            "gentle": ("zh-CN-XiaoyiNeural", "-18%"),
+            "broadcast": ("zh-CN-YunyangNeural", "-5%"),
+        }
+
+    voice, rate = style_defaults[style]
+
+    # 允许从配置覆盖风格 voice/rate
+    lang_key = "EN" if lang == "en" else "ZH"
+    voice = APP_CONFIG.get(f"EDGE_TTS_VOICE_{lang_key}_{style.upper()}", voice)
+    rate = APP_CONFIG.get(f"EDGE_TTS_RATE_{lang_key}_{style.upper()}", rate)
+    return voice, rate
+
+
+async def _synthesize_edge_tts_with_style(text: str, lang: str, style: str) -> bytes:
+    """按指定风格调用 Edge TTS。"""
+    voice, rate = _resolve_tts_profile(lang, style)
+    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
+    chunks = []
+    async for chunk in communicate.stream():
+        if chunk.get("type") == "audio":
+            chunks.append(chunk.get("data", b""))
+    return b"".join(chunks)
 
 
 def _parse_news_html(file_path: Path) -> Optional[dict]:
@@ -478,6 +555,40 @@ def api_news(date: str):
     return jsonify(data)
 
 
+@app.route("/api/tts", methods=["POST"])
+def api_tts():
+    """将文本转为音频（Edge TTS）。"""
+    if edge_tts is None:
+        return jsonify({"error": "edge-tts 未安装"}), 503
+
+    payload = request.get_json(silent=True) or {}
+    text = _normalize_tts_text(payload.get("text", ""))
+    lang = payload.get("lang", "zh")
+    style = payload.get("style", "standard")
+    if lang not in ["zh", "en"]:
+        lang = "zh"
+
+    if not text:
+        return jsonify({"error": "文本不能为空"}), 400
+
+    # 防止超长请求导致响应过慢。
+    text = text[:2500]
+
+    try:
+        audio_bytes = asyncio.run(_synthesize_edge_tts_with_style(text, lang, style))
+        if not audio_bytes:
+            return jsonify({"error": "TTS 生成失败"}), 500
+
+        return Response(
+            audio_bytes,
+            mimetype="audio/mpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception as exc:
+        logger.warning("Edge TTS 调用失败: %s", exc)
+        return jsonify({"error": "TTS 服务暂时不可用"}), 500
+
+
 # ── 任务 API 路由 ────────────────────────────────────────
 
 
@@ -578,22 +689,107 @@ def api_tasks_delete(task_id: int):
 
 def _load_essay_questions():
     """从 XLS 文件加载作文题目，支持 pandas 和 xlrd 回退。"""
+    def _normalize_header(value: object) -> str:
+        """标准化表头，去除空白与常见分隔符。"""
+        text = str(value or "").strip().lower()
+        return re.sub(r"[\s_\-]+", "", text)
+
+    def _normalize_cell(value: object) -> str:
+        """标准化单元格内容，过滤空值与 NaN。"""
+        if value is None:
+            return ""
+        text = str(value).strip()
+        return "" if text.lower() == "nan" else text
+
+    def _select_columns_from_headers(headers: list[str]) -> tuple[Optional[str], Optional[str]]:
+        """根据表头名称挑选题目标题列和题目内容列。"""
+        title_aliases = {
+            "题目标题", "标题", "作文题目", "题目", "题干标题", "标题名称", "topic", "title"
+        }
+        content_aliases = {
+            "题目内容", "内容", "作文内容", "题干", "材料", "题目描述", "description", "content"
+        }
+
+        title_col = None
+        content_col = None
+        normalized_map = {_normalize_header(h): h for h in headers}
+
+        for alias in title_aliases:
+            col = normalized_map.get(_normalize_header(alias))
+            if col is not None:
+                title_col = col
+                break
+
+        for alias in content_aliases:
+            col = normalized_map.get(_normalize_header(alias))
+            if col is not None:
+                content_col = col
+                break
+
+        # 如果未匹配到标准列，回退到前两个非空列，降低因表头变化导致的读取失败。
+        if title_col is None or content_col is None:
+            non_empty = [h for h in headers if str(h).strip()]
+            if len(non_empty) >= 2:
+                title_col = title_col or non_empty[0]
+                content_col = content_col or non_empty[1]
+
+        return title_col, content_col
+
     questions = []
+
+    def _load_from_json_fallback() -> list[dict]:
+        """在 XLS 解析失败时从 JSON 兜底加载。"""
+        if not ESSAY_JSON_PATH.exists():
+            return []
+        try:
+            payload = json.loads(ESSAY_JSON_PATH.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                return []
+
+            normalized = []
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                title = _normalize_cell(item.get("title", ""))
+                content = _normalize_cell(item.get("content", ""))
+                if title and content:
+                    normalized.append({"title": title, "content": content})
+
+            if normalized:
+                logger.info("使用 JSON 兜底加载了 %d 道作文题目", len(normalized))
+            return normalized
+        except Exception as exc:
+            logger.warning("JSON 兜底加载失败: %s", exc)
+            return []
+
     if not ESSAY_XLS_PATH.exists():
         logger.warning(f"作文题目文件不存在: {ESSAY_XLS_PATH}")
-        return questions
+        return _load_from_json_fallback()
 
     try:
         # 优先尝试使用 pandas
         import pandas as pd
         df = pd.read_excel(ESSAY_XLS_PATH)
+        title_col, content_col = _select_columns_from_headers(df.columns.tolist())
+        if title_col is None or content_col is None:
+            logger.warning("pandas 未识别到有效列，尝试 xlrd 回退")
+            raise ValueError("missing title/content columns")
+
         for _, row in df.iterrows():
-            title = str(row.get('题目标题', '')).strip()
-            content = str(row.get('题目内容', '')).strip()
+            title_raw = row.get(title_col, "")
+            content_raw = row.get(content_col, "")
+            if pd.isna(title_raw) or pd.isna(content_raw):
+                continue
+
+            title = _normalize_cell(title_raw)
+            content = _normalize_cell(content_raw)
             if title and content:
                 questions.append({'title': title, 'content': content})
         logger.info(f"使用 pandas 加载了 {len(questions)} 道作文题目")
-        return questions
+        if questions:
+            return questions
+        logger.warning("pandas 读取结果为空，尝试 JSON 兜底")
+        return _load_from_json_fallback()
     except ImportError:
         pass  # pandas 未安装，使用 xlrd
     except Exception as e:
@@ -607,15 +803,10 @@ def _load_essay_questions():
 
         # 查找列索引
         header_row = 0
-        title_col = None
-        content_col = None
-
-        for col in range(sheet.ncols):
-            cell_value = str(sheet.cell_value(header_row, col)).strip()
-            if cell_value == '题目标题':
-                title_col = col
-            elif cell_value == '题目内容':
-                content_col = col
+        headers = [str(sheet.cell_value(header_row, col)).strip() for col in range(sheet.ncols)]
+        title_name, content_name = _select_columns_from_headers(headers)
+        title_col = headers.index(title_name) if title_name in headers else None
+        content_col = headers.index(content_name) if content_name in headers else None
 
         if title_col is None or content_col is None:
             logger.warning("无法找到题目标题或题目内容列")
@@ -623,21 +814,37 @@ def _load_essay_questions():
 
         # 读取数据行
         for row in range(1, sheet.nrows):
-            title = str(sheet.cell_value(row, title_col)).strip()
-            content = str(sheet.cell_value(row, content_col)).strip()
+            title = _normalize_cell(sheet.cell_value(row, title_col))
+            content = _normalize_cell(sheet.cell_value(row, content_col))
             if title and content:
                 questions.append({'title': title, 'content': content})
 
         logger.info(f"使用 xlrd 加载了 {len(questions)} 道作文题目")
-        return questions
+        if questions:
+            return questions
+        logger.warning("xlrd 读取结果为空，尝试 JSON 兜底")
+        return _load_from_json_fallback()
 
     except Exception as e:
         logger.error(f"加载作文题目失败: {e}")
-        return questions
+        return _load_from_json_fallback()
 
 
-# 加载作文题目
+# 加载作文题目（启动时预加载，运行时可自动重载）
 _essay_questions = _load_essay_questions()
+
+
+def _get_essay_questions(force_reload: bool = False) -> list[dict]:
+    """获取作文题目列表；为空时自动重载，避免因启动时异常导致一直为空。"""
+    global _essay_questions
+
+    if force_reload or not _essay_questions:
+        reloaded = _load_essay_questions()
+        if reloaded:
+            _essay_questions = reloaded
+            logger.info("作文题目已重载，当前共 %d 条", len(_essay_questions))
+
+    return _essay_questions
 
 
 def _get_translator():
@@ -659,10 +866,11 @@ def essay_page():
 @app.route("/api/essay/random")
 def api_essay_random():
     """随机抽取一道作文题目。"""
-    if not _essay_questions:
+    questions = _get_essay_questions()
+    if not questions:
         return jsonify({"error": "题目库为空"}), 500
 
-    question = random.choice(_essay_questions)
+    question = random.choice(questions)
     return jsonify({
         "title": question['title'],
         "content": question['content']
@@ -672,7 +880,17 @@ def api_essay_random():
 @app.route("/api/essay/questions")
 def api_essay_questions():
     """获取所有作文题目列表。"""
-    return jsonify({"questions": _essay_questions})
+    return jsonify({"questions": _get_essay_questions()})
+
+
+@app.route("/api/essay/reload", methods=["POST"])
+def api_essay_reload():
+    """手动重载作文题目。"""
+    questions = _get_essay_questions(force_reload=True)
+    if not questions:
+        return jsonify({"error": "重载失败，题目库为空"}), 500
+
+    return jsonify({"message": "重载成功", "count": len(questions)})
 
 
 ESSAY_GRADING_PROMPT = '''你是一位资深高考作文阅卷老师。请对以下学生的作文大纲进行评分和点评。
@@ -702,6 +920,34 @@ ESSAY_GRADING_PROMPT = '''你是一位资深高考作文阅卷老师。请对以
 三、结论（...）
 
 请用中文回答，保持专业、客观、建设性的语气。'''
+
+
+ESSAY_GENERATE_PROMPT = '''你是一位资深高考作文辅导老师。请根据以下作文题目，按照指定格式生成一篇议论文写作大纲。
+
+作文题目：
+{question_title}
+{question_content}
+
+请严格按照以下范例格式生成大纲：
+
+议论文写作提纲（示例）：《谈意气》（2006湖南卷优秀作文）
+一、引论（1）用雏鹰翱翔天宇、骏马驰骋万里引出中心论点：英雄创业靠的是舍我其谁勇战万方的勇气。（类比）
+二、本论（2—7）分三层论证中心论点。
+第一层（2-3）分论点1：舍我其谁的意气使人奋起。（例证、引证）
+论据：李贺、陈胜、孟子豪言壮语（效果分析法）
+第二层（4-5）分论点2：献身理想的意气使人勇敢。（例证、排比）
+论据：布鲁诺、哥伦布、红军的事例（因果分析法）
+第三层（6-7）分论点3：勇于探索的意气使人发挥潜力。（例证）
+论据：杨振宁、李政道、吴剑雄、王淦昌（因果分析法）
+三、结论（8）用浆、巨轮、彼岸作比归纳全文，激励人们。（比喻）
+
+要求：
+1. 严格按照上述格式：引论、本论（分三层）、结论
+2. 每一层都要有分论点、论证方法和论据
+3. 语言简洁有力，适合高考议论文
+4. 只输出大纲内容，不要有任何额外说明
+
+请直接输出生成的大纲：'''
 
 
 @app.route("/api/essay/grade", methods=["POST"])
@@ -741,6 +987,43 @@ def api_essay_grade():
     except Exception as exc:
         logger.error(f"评分失败: {exc}")
         return jsonify({"error": f"评分失败: {str(exc)}"}), 500
+
+
+@app.route("/api/essay/generate-outline", methods=["POST"])
+def api_essay_generate_outline():
+    """调用大模型生成作文大纲。"""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "无效请求"}), 400
+
+    question_title = data.get("question_title", "")
+    question_content = data.get("question_content", "")
+
+    if not question_title:
+        return jsonify({"error": "缺少题目信息"}), 400
+
+    translator = _get_translator()
+    if not translator:
+        return jsonify({"error": "AI 服务暂不可用"}), 503
+
+    try:
+        prompt = ESSAY_GENERATE_PROMPT.format(
+            question_title=question_title,
+            question_content=question_content
+        )
+
+        message = translator.client.messages.create(
+            model=translator.model,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        result = translator._get_text_from_response(message).strip()
+        return jsonify({"outline": result})
+
+    except Exception as exc:
+        logger.error(f"大纲生成失败: {exc}")
+        return jsonify({"error": f"大纲生成失败: {str(exc)}"}), 500
 
 
 # ── 启动 ──────────────────────────────────────────────

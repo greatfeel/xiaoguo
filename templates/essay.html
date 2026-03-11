@@ -162,6 +162,30 @@
             background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
             animation: pulse 1.5s infinite;
         }
+        .ai-generate-btn {
+            font-size: 13px;
+            color: #fff;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            -webkit-appearance: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+        .ai-generate-btn:hover {
+            opacity: 0.9;
+        }
+        .ai-generate-btn:active {
+            transform: scale(0.95);
+        }
+        .ai-generate-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.7; }
@@ -348,9 +372,14 @@
         <div class="input-section">
             <div class="section-header">
                 <span class="section-title">✏️ 写作大纲</span>
-                <button class="voice-btn" id="voiceBtn" onclick="toggleVoiceInput()">
-                    🎤 语音输入
-                </button>
+                <div style="display: flex; gap: 10px;">
+                    <button class="ai-generate-btn" id="aiGenerateBtn" onclick="generateAIOutline()">
+                        🤖 AI 生成
+                    </button>
+                    <button class="voice-btn" id="voiceBtn" onclick="toggleVoiceInput()">
+                        🎤 语音输入
+                    </button>
+                </div>
             </div>
             <textarea
                 class="outline-textarea"
@@ -593,6 +622,53 @@
 
             // 滚动到结果区域
             document.getElementById('resultCard').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // AI 生成大纲
+        async function generateAIOutline() {
+            if (!currentQuestion) {
+                showError('题目加载中，请稍候');
+                return;
+            }
+
+            const aiBtn = document.getElementById('aiGenerateBtn');
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const loadingText = loadingOverlay.querySelector('.loading-text');
+
+            aiBtn.disabled = true;
+            loadingText.textContent = 'AI 正在生成大纲...';
+            loadingOverlay.classList.add('visible');
+
+            try {
+                const res = await fetch('/api/essay/generate-outline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question_title: currentQuestion.title,
+                        question_content: currentQuestion.content
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // 填充生成的大纲到输入框
+                const textarea = document.getElementById('outlineInput');
+                textarea.value = data.outline;
+
+                // 滚动到输入框
+                textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            } catch (err) {
+                showError(err.message || '大纲生成失败，请重试');
+            } finally {
+                aiBtn.disabled = false;
+                loadingOverlay.classList.remove('visible');
+                loadingText.textContent = 'AI 正在评分...';
+            }
         }
 
         // 显示错误提示
