@@ -298,11 +298,14 @@ def api_news(date: str):
         actual_date = _find_date_with_news(date)
         if actual_date and actual_date != date:
             data = _get_news_for_date(actual_date)
+            data["date"] = actual_date
             data["actual_date"] = actual_date
         elif actual_date is None:
             # 没有任何新闻
+            data["date"] = date
             data["actual_date"] = date
     else:
+        data["date"] = date
         data["actual_date"] = date
 
     data["requested_date"] = date
