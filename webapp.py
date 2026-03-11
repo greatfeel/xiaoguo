@@ -101,14 +101,33 @@ def _get_available_dates() -> list[str]:
     return sorted(dates, reverse=True)
 
 
+def _find_en_file(dir_path: Path, zh_files_sorted: list, zh_index: int) -> Optional[Path]:
+    """查找与指定中文文件配对的英文版本文件（_en.html）。
+
+    使用排序索引匹配，因为 saver 保持原始顺序保存中英文文件。
+
+    Args:
+        dir_path: 目录路径
+        zh_files_sorted: 排序后的中文文件列表
+        zh_index: 当前文件在 zh_files_sorted 中的索引
+
+    Returns:
+        英文版文件路径，不存在则返回 None
+    """
+    en_files = sorted(dir_path.glob("*_en.html"))
+    if not en_files or zh_index >= len(en_files):
+        return None
+    return en_files[zh_index]
+
+
 def _get_news_for_date(date: str) -> dict:
-    """获取指定日期的所有新闻。
+    """获取指定日期的所有新闻，包含双语字段。
 
     Args:
         date: 日期字符串，如 '2026-03-09'
 
     Returns:
-        按分类组织的新闻数据字典
+        按分类组织的新闻数据字典，包含 title_en/content_en 字段（如果存在英文版）
     """
     result = {"date": date, "science": [], "tech": [], "idaily": []}
 
@@ -122,13 +141,28 @@ def _get_news_for_date(date: str) -> dict:
     for category, dir_path in categories.items():
         if not dir_path.is_dir():
             continue
-        for html_file in sorted(dir_path.glob("*.html")):
-            # 只保留包含中文字符的文件（跳过纯英文版本）
-            if not re.search(r"[\u4e00-\u9fff]", html_file.stem):
-                continue
+
+        # 收集所有中文命名的文件，排序
+        zh_files = sorted([
+            f for f in dir_path.glob("*.html")
+            if not f.stem.endswith("_en")
+            and re.search(r"[\u4e00-\u9fff]", f.stem)
+        ])
+
+        for idx, html_file in enumerate(zh_files):
             article = _parse_news_html(html_file)
-            if article:
-                result[category].append(article)
+            if not article:
+                continue
+
+            # 尝试加载对应的英文版本
+            en_file = _find_en_file(dir_path, zh_files, idx)
+            if en_file:
+                en_article = _parse_news_html(en_file)
+                if en_article:
+                    article['title_en'] = en_article['title']
+                    article['content_en'] = en_article['content']
+
+            result[category].append(article)
 
     return result
 
