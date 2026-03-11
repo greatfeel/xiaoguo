@@ -9,3 +9,6 @@ archives
 __pycache__
 logs
 news
+.playwright-mcp
+backup
+docs/superpowers

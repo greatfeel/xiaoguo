@@ -5,11 +5,12 @@
 
 import os
 import re
+import sqlite3
 import logging
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, jsonify, render_template, abort, redirect
+from flask import Flask, jsonify, render_template, abort, redirect, request
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,32 @@ app = Flask(__name__)
 
 # 新闻根目录
 NEWS_DIR = Path(__file__).parent / "news"
+
+# 任务数据库路径
+DB_PATH = Path(__file__).parent / "tasks.db"
+
+
+def _init_db():
+    """Initialize tasks table if not exists."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            due_date TEXT,
+            priority INTEGER DEFAULT 2 CHECK(priority IN (1, 2, 3)),
+            completed INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+# Initialize on startup
+_init_db()
 
 
 def _parse_news_html(file_path: Path) -> Optional[dict]:
@@ -220,6 +247,101 @@ def api_news(date: str):
 
     data = _get_news_for_date(date)
     return jsonify(data)
+
+
+# ── 任务 API 路由 ────────────────────────────────────────
+
+
+@app.route("/api/tasks", methods=["GET"])
+def api_tasks_get():
+    """获取所有任务，按截止日期和优先级排序。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.execute("""
+        SELECT * FROM tasks
+        ORDER BY
+            CASE WHEN due_date IS NULL OR due_date = '' THEN 1 ELSE 0 END,
+            due_date ASC,
+            priority DESC,
+            created_at DESC
+    """)
+    tasks = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return jsonify({"tasks": tasks})
+
+
+@app.route("/api/tasks", methods=["POST"])
+def api_tasks_create():
+    """创建新任务。"""
+    data = request.get_json()
+    if not data or not data.get("title"):
+        return jsonify({"error": "标题不能为空"}), 400
+
+    title = data.get("title", "")
+    description = data.get("description", "")
+    due_date = data.get("due_date", "")
+    priority = data.get("priority", 2)
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute("""
+        INSERT INTO tasks (title, description, due_date, priority, created_at, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+    """, (title, description, due_date, priority))
+    task_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return jsonify({"id": task_id, "message": "Task created"}), 201
+
+
+@app.route("/api/tasks/<int:task_id>", methods=["PUT"])
+def api_tasks_update(task_id: int):
+    """更新任务。"""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "无效数据"}), 400
+
+    # Build dynamic update query
+    allowed_fields = ["title", "description", "due_date", "priority", "completed"]
+    updates = []
+    values = []
+
+    for field in allowed_fields:
+        if field in data:
+            updates.append(f"{field} = ?")
+            values.append(data[field])
+
+    if not updates:
+        return jsonify({"error": "没有要更新的字段"}), 400
+
+    updates.append("updated_at = datetime('now')")
+    values.append(task_id)
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?", values)
+    conn.commit()
+
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({"error": "任务不存在"}), 404
+
+    conn.close()
+    return jsonify({"message": "Task updated"})
+
+
+@app.route("/api/tasks/<int:task_id>", methods=["DELETE"])
+def api_tasks_delete(task_id: int):
+    """删除任务。"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({"error": "任务不存在"}), 404
+
+    conn.close()
+    return jsonify({"message": "Task deleted"})
 
 
 # ── 启动 ──────────────────────────────────────────────

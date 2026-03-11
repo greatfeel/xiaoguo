@@ -25,3 +25,13 @@ https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b
 # 2026-03-10-03
 在网站首页构建一个新的入口菜单，我的任务，点击进去将下面的代码嵌入在页面中
 <iframe src="https://therapeutic-torta-faf.notion.site/ebd//31f19d94caea80b1a1ede06d82b1b7ac?v=31f19d94caea806bbaef000c73687047" width="100%" height="600" frameborder="0" allowfullscreen />
+
+# 2026-03-11-01
+## 对于热点新闻的修改
+- 保留kagi 的英文新闻，改为每条新闻用两个 Tab 页进行展示，默认展示英文，可以点击英文、中文按钮进行切换展示
+- 对于 idaily 的中文新闻，利用大模型翻译为英文，同样地进行中英文双 tab 展示，和 kagi 新闻一样
+- 在每条新闻的标题旁边加一个按钮，点击之后，调用免费的 TTS API，播报该条新闻，一条播完了继续播报下一条
+- 在播放状态下，按钮显示暂停，点击按钮可以暂停播放，按钮显示播放，点击播放可以继续播放
+
+# 2026-03-11-02
+- 修改我的任务模块，模仿目前的 notion 的功能，但去掉嵌入网页，自己写一个 todo list 的小应用，可以增，删，改任务
