@@ -128,6 +128,52 @@ def _get_available_dates() -> list[str]:
     return sorted(dates, reverse=True)
 
 
+def _find_date_with_news(start_date: str = None) -> Optional[str]:
+    """从指定日期开始往前找，第一个有新闻的日期。
+
+    Args:
+        start_date: 起始日期，默认今天
+
+    Returns:
+        第一个有新闻的日期字符串，如果没有则返回 None
+    """
+    from datetime import datetime
+
+    if start_date is None:
+        start_date = datetime.now().strftime('%Y-%m-%d')
+
+    dates = _get_available_dates()
+    if not dates:
+        return None
+
+    # 从最新的日期开始找
+    for date in dates:
+        if date > start_date:
+            continue
+
+        # 检查这个日期是否有任何新闻
+        has_news = False
+        for source_path in [
+            NEWS_DIR / "kagi" / "science" / date,
+            NEWS_DIR / "kagi" / "tech" / date,
+            NEWS_DIR / "idaily" / date,
+        ]:
+            if source_path.is_dir():
+                zh_files = [
+                    f for f in source_path.glob("*.html")
+                    if not f.stem.endswith("_en")
+                    and re.search(r"[\u4e00-\u9fff]", f.stem)
+                ]
+                if zh_files:
+                    has_news = True
+                    break
+
+        if has_news:
+            return date
+
+    return None
+
+
 def _find_en_file(dir_path: Path, zh_files_sorted: list, zh_index: int) -> Optional[Path]:
     """查找与指定中文文件配对的英文版本文件（_en.html）。
 
@@ -237,15 +283,29 @@ def api_dates():
 
 @app.route("/api/news/<date>")
 def api_news(date: str):
-    """返回指定日期的新闻数据。
-
-    Args:
-        date: 日期字符串，格式 YYYY-MM-DD
-    """
+    """返回指定日期的新闻数据，如果该日期无新闻则往前找最近的日期。"""
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         abort(400, "日期格式错误，应为 YYYY-MM-DD")
 
+    # 尝试获取指定日期的新闻
     data = _get_news_for_date(date)
+
+    # 检查是否有新闻，如果没有则往前找
+    has_news = any([data.get("science"), data.get("tech"), data.get("idaily")])
+
+    if not has_news:
+        # 往前找最近的日期
+        actual_date = _find_date_with_news(date)
+        if actual_date and actual_date != date:
+            data = _get_news_for_date(actual_date)
+            data["actual_date"] = actual_date
+        elif actual_date is None:
+            # 没有任何新闻
+            data["actual_date"] = date
+    else:
+        data["actual_date"] = date
+
+    data["requested_date"] = date
     return jsonify(data)
 
 

@@ -68,7 +68,7 @@ def process_source(
     need_translate: bool = True,
     translate_to_en: bool = False,
 ) -> int:
-    """处理单个新闻源
+    """处理单个新闻源，逐条处理并立即保存
 
     Args:
         need_translate: 是否需要翻译（iDaily 已经是中文，不需要翻译）
@@ -98,25 +98,53 @@ def process_source(
     actual_date = today_news[0].get('published', date)
     logger.info(f"Processing {len(today_news)} news items for {actual_date}")
 
-    # 翻译英文新闻（iDaily 已经是中文，跳过翻译）
-    if translator is not None and need_translate:
-        # 先保存英文原文到 archives 目录
-        archive_saver = HTMLSaver({**saver.config, 'OUTPUT_DIR': 'archives'})
-        archive_saver.save_batch(today_news, source, actual_date)
-        logger.info(f"Archived {len(today_news)} original articles")
+    # 逐条处理：检查存在 -> 立即保存 -> 翻译 -> 立即保存翻译
+    saved_count = 0
 
-        translated_news = translator.translate_batch(today_news)
-    elif translator is not None and translate_to_en:
-        # iDaily: 中文->英文，生成双语版本
-        logger.info(f"Translating iDaily zh->en for {len(today_news)} items")
-        translated_news = translator.translate_batch_zh_to_en(today_news)
-    else:
-        translated_news = today_news
+    for item in today_news:
+        # 生成文件名用于检查
+        filename = saver._generate_filename(item.get('title', ''))
 
-    # 保存 HTML
-    saved_files = saver.save_batch(translated_news, source, actual_date)
+        # 检查文件是否已存在
+        dir_path = os.path.join(saver.output_dir, source, actual_date)
+        os.makedirs(dir_path, exist_ok=True)
+        file_path = os.path.join(dir_path, f"{filename}.html")
+        en_file_path = os.path.join(dir_path, f"{filename}_en.html")
 
-    return len(saved_files)
+        if os.path.exists(file_path) or os.path.exists(en_file_path):
+            logger.info(f"跳过已存在: {filename}")
+            continue
+
+        # 立即保存原始文件
+        try:
+            saver.save_news(item, source, actual_date)
+            saved_count += 1
+            logger.info(f"已保存: {filename}")
+        except Exception as e:
+            logger.error(f"保存失败 {filename}: {e}")
+            continue
+
+        # 如果需要翻译，立即翻译并保存
+        if translator is not None and need_translate:
+            try:
+                translated = translator.translate_news(item)
+                if translated:
+                    saver.save_news(translated, source, actual_date)
+                    logger.info(f"已保存翻译: {filename}")
+            except Exception as e:
+                logger.error(f"翻译失败 {filename}: {e}")
+
+        # 如果需要中文->英文翻译（iDaily）
+        if translator is not None and translate_to_en:
+            try:
+                translated = translator.translate_news_zh_to_en(item)
+                if translated:
+                    saver.save_news(translated, source, actual_date)
+                    logger.info(f"已保存英文版: {filename}")
+            except Exception as e:
+                logger.error(f"翻译失败 {filename}: {e}")
+
+    return saved_count
 
 
 def main():

@@ -33,6 +33,12 @@ class HTMLSaver:
         title = news_item.get('title', '')
         filename = self._generate_filename(title)
         file_path = os.path.join(dir_path, f"{filename}.html")
+        en_file_path = os.path.join(dir_path, f"{filename}_en.html")
+
+        # 检查文件是否已存在
+        if os.path.exists(file_path) or os.path.exists(en_file_path):
+            logger.info(f"文件已存在，跳过: {filename}")
+            return file_path
 
         # 生成 HTML 内容
         html_content = self._generate_html(news_item, source, date)
