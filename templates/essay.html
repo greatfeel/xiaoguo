@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>作文宝 - 小果</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            -webkit-overflow-scrolling: touch;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            overscroll-behavior: contain;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+            padding-bottom: calc(40px + env(safe-area-inset-bottom));
+        }
+        /* 顶部导航 */
+        .navbar {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 14px 16px;
+            padding-top: max(14px, env(safe-area-inset-top));
+            display: flex;
+            align-items: center;
+            color: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .navbar .title {
+            flex: 1;
+            text-align: center;
+            font-size: 17px;
+            font-weight: 600;
+            margin-right: 40px;
+        }
+        /* 主内容区 */
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px 16px;
+        }
+        /* 题目卡片 */
+        .question-card {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+        }
+        .question-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .question-label {
+            font-size: 13px;
+            color: #667eea;
+            font-weight: 600;
+            background: rgba(102, 126, 234, 0.1);
+            padding: 6px 12px;
+            border-radius: 20px;
+        }
+        .refresh-btn {
+            font-size: 13px;
+            color: #667eea;
+            background: none;
+            border: 1px solid #667eea;
+            padding: 6px 14px;
+            border-radius: 20px;
+            cursor: pointer;
+            -webkit-appearance: none;
+            transition: all 0.2s;
+        }
+        .refresh-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+        .refresh-btn:active {
+            transform: scale(0.95);
+        }
+        .refresh-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .question-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #222;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .question-content {
+            font-size: 15px;
+            color: #555;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 12px;
+            border-left: 3px solid #667eea;
+        }
+        /* 输入区 */
+        .input-section {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+        }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+        }
+        .voice-btn {
+            font-size: 13px;
+            color: #fff;
+            background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            -webkit-appearance: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+        .voice-btn:hover {
+            opacity: 0.9;
+        }
+        .voice-btn:active {
+            transform: scale(0.95);
+        }
+        .voice-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .voice-btn.recording {
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .voice-hint {
+            font-size: 12px;
+            color: #999;
+            margin-top: 8px;
+            text-align: center;
+        }
+        .outline-textarea {
+            width: 100%;
+            min-height: 200px;
+            padding: 16px;
+            font-size: 15px;
+            line-height: 1.8;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            resize: vertical;
+            font-family: inherit;
+            -webkit-appearance: none;
+        }
+        .outline-textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        .example-box {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 16px;
+            font-size: 13px;
+            color: #666;
+        }
+        .example-title {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .example-content {
+            white-space: pre-wrap;
+            line-height: 1.7;
+        }
+        .submit-btn {
+            width: 100%;
+            margin-top: 20px;
+            padding: 14px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            color: white;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            -webkit-appearance: none;
+            transition: all 0.2s;
+        }
+        .submit-btn:hover {
+            opacity: 0.95;
+        }
+        .submit-btn:active {
+            transform: scale(0.98);
+        }
+        .submit-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        /* 评分结果 */
+        .result-card {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            margin-top: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+            display: none;
+        }
+        .result-card.visible {
+            display: block;
+        }
+        .result-header {
+            text-align: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #eee;
+        }
+        .score-display {
+            font-size: 48px;
+            font-weight: 700;
+            color: #667eea;
+            line-height: 1;
+        }
+        .score-label {
+            font-size: 14px;
+            color: #999;
+            margin-top: 4px;
+        }
+        .result-content {
+            font-size: 15px;
+            line-height: 1.8;
+            color: #444;
+            white-space: pre-wrap;
+        }
+        /* 加载状态 */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .loading-overlay.visible {
+            display: flex;
+        }
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #e9ecef;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .loading-text {
+            margin-left: 12px;
+            font-size: 15px;
+            color: #667eea;
+            font-weight: 500;
+        }
+        /* 错误提示 */
+        .error-toast {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #e74c3c;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 24px;
+            font-size: 14px;
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 1001;
+        }
+        .error-toast.visible {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/">← 返回</a>
+        <span class="title">作文宝</span>
+    </nav>
+
+    <div class="container">
+        <!-- 题目卡片 -->
+        <div class="question-card">
+            <div class="question-header">
+                <span class="question-label">📚 今日题目</span>
+                <button class="refresh-btn" id="refreshBtn" onclick="loadRandomQuestion()">
+                    🔄 换一题
+                </button>
+            </div>
+            <div id="questionLoading" style="text-align:center;padding:20px;color:#999;">
+                加载中...
+            </div>
+            <div id="questionContent" style="display:none;">
+                <div class="question-title" id="questionTitle"></div>
+                <div class="question-content" id="questionBody"></div>
+            </div>
+        </div>
+
+        <!-- 输入区 -->
+        <div class="input-section">
+            <div class="section-header">
+                <span class="section-title">✏️ 写作大纲</span>
+                <button class="voice-btn" id="voiceBtn" onclick="toggleVoiceInput()">
+                    🎤 语音输入
+                </button>
+            </div>
+            <textarea
+                class="outline-textarea"
+                id="outlineInput"
+                placeholder="请输入你的写作大纲..."
+            ></textarea>
+            <div class="voice-hint" id="voiceHint" style="display:none;">
+                点击麦克风开始语音输入，再次点击结束
+            </div>
+
+            <!-- 范例 -->
+            <div class="example-box">
+                <div class="example-title">💡 输入范例（议论文提纲）</div>
+                <div class="example-content">《谈意气》（2006湖南卷优秀作文）
+一、引论（1）用雏鹰翱翔天宇、骏马驰骋万里引出中心论点：英雄创业靠的是舍我其谁勇战万方的勇气。（类比）
+二、本论（2—7）分三层论证中心论点。
+第一层（2-3）分论点1：舍我其谁的意气使人奋起。（例证、引证）
+论据：李贺、陈胜、孟子豪言壮语（效果分析法）
+第二层（4-5）分论点2：献身理想的意气使人勇敢。（例证、排比）
+论据：布鲁诺、哥伦布、红军的事例（因果分析法）
+第三层（6-7）分论点3：勇于探索的意气使人发挥潜力。（例证）
+论据：杨振宁、李政道、吴剑雄、王淦昌（因果分析法）
+三、结论（8）用浆、巨轮、彼岸作比归纳全文，激励人们。（比喻）</div>
+            </div>
+
+            <button class="submit-btn" id="submitBtn" onclick="submitOutline()">
+                提交评分
+            </button>
+        </div>
+
+        <!-- 评分结果 -->
+        <div class="result-card" id="resultCard">
+            <div class="result-header">
+                <div class="score-display" id="scoreDisplay">-</div>
+                <div class="score-label">综合得分</div>
+            </div>
+            <div class="result-content" id="resultContent"></div>
+        </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">AI 正在评分...</div>
+    </div>
+
+    <!-- 错误提示 -->
+    <div class="error-toast" id="errorToast"></div>
+
+    <script>
+        // 当前题目
+        let currentQuestion = null;
+
+        // 语音识别相关
+        let recognition = null;
+        let isRecording = false;
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+        // 初始化语音识别
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.lang = 'zh-CN';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onresult = (event) => {
+                const textarea = document.getElementById('outlineInput');
+                let finalTranscript = '';
+                let interimTranscript = '';
+
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    if (event.results[i].isFinal) {
+                        finalTranscript += transcript;
+                    } else {
+                        interimTranscript += transcript;
+                    }
+                }
+
+                // 追加最终结果
+                if (finalTranscript) {
+                    const current = textarea.value;
+                    textarea.value = current + (current ? ' ' : '') + finalTranscript;
+                }
+            };
+
+            recognition.onerror = (event) => {
+                console.error('语音识别错误:', event.error);
+                stopVoiceInput();
+                showError('语音识别出错，请重试');
+            };
+
+            recognition.onend = () => {
+                if (isRecording) {
+                    // 如果还在录音状态但意外结束，尝试重新开始
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        stopVoiceInput();
+                    }
+                }
+            };
+        }
+
+        // 切换语音输入
+        function toggleVoiceInput() {
+            if (!SpeechRecognition) {
+                showError('您的浏览器不支持语音识别，请使用 Chrome 或 Safari');
+                return;
+            }
+
+            if (isRecording) {
+                stopVoiceInput();
+            } else {
+                startVoiceInput();
+            }
+        }
+
+        // 开始语音输入
+        function startVoiceInput() {
+            try {
+                recognition.start();
+                isRecording = true;
+                const btn = document.getElementById('voiceBtn');
+                btn.textContent = '⏹ 停止录音';
+                btn.classList.add('recording');
+                document.getElementById('voiceHint').style.display = 'block';
+            } catch (e) {
+                showError('无法启动语音识别');
+            }
+        }
+
+        // 停止语音输入
+        function stopVoiceInput() {
+            try {
+                recognition.stop();
+            } catch (e) {}
+            isRecording = false;
+            const btn = document.getElementById('voiceBtn');
+            btn.textContent = '🎤 语音输入';
+            btn.classList.remove('recording');
+            document.getElementById('voiceHint').style.display = 'none';
+        }
+
+        // 页面加载时获取随机题目
+        async function loadRandomQuestion() {
+            const refreshBtn = document.getElementById('refreshBtn');
+            const loadingEl = document.getElementById('questionLoading');
+            const contentEl = document.getElementById('questionContent');
+
+            refreshBtn.disabled = true;
+            loadingEl.style.display = 'block';
+            contentEl.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/essay/random');
+                if (!res.ok) throw new Error('加载失败');
+
+                const data = await res.json();
+                currentQuestion = data;
+
+                document.getElementById('questionTitle').textContent = data.title;
+                document.getElementById('questionBody').textContent = data.content;
+
+                loadingEl.style.display = 'none';
+                contentEl.style.display = 'block';
+
+                // 清空之前的结果
+                document.getElementById('resultCard').classList.remove('visible');
+            } catch (err) {
+                showError('加载题目失败，请刷新重试');
+                loadingEl.textContent = '加载失败';
+            } finally {
+                refreshBtn.disabled = false;
+            }
+        }
+
+        // 提交评分
+        async function submitOutline() {
+            const outline = document.getElementById('outlineInput').value.trim();
+            if (!outline) {
+                showError('请先输入写作大纲');
+                return;
+            }
+            if (!currentQuestion) {
+                showError('题目加载中，请稍候');
+                return;
+            }
+
+            const submitBtn = document.getElementById('submitBtn');
+            const loadingOverlay = document.getElementById('loadingOverlay');
+
+            submitBtn.disabled = true;
+            loadingOverlay.classList.add('visible');
+
+            try {
+                const res = await fetch('/api/essay/grade', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question_title: currentQuestion.title,
+                        question_content: currentQuestion.content,
+                        outline: outline
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // 解析评分结果，提取分数
+                displayResult(data.result);
+
+            } catch (err) {
+                showError(err.message || '评分失败，请重试');
+            } finally {
+                submitBtn.disabled = false;
+                loadingOverlay.classList.remove('visible');
+            }
+        }
+
+        // 显示评分结果
+        function displayResult(resultText) {
+            // 尝试提取分数
+            let score = '-';
+            const scoreMatch = resultText.match(/【得分】\s*([\d.]+)\s*\/\s*10/);
+            if (scoreMatch) {
+                score = scoreMatch[1];
+            }
+
+            document.getElementById('scoreDisplay').textContent = score;
+
+            // 使用 textContent 显示结果，避免 XSS
+            const contentEl = document.getElementById('resultContent');
+            contentEl.textContent = resultText;
+
+            document.getElementById('resultCard').classList.add('visible');
+
+            // 滚动到结果区域
+            document.getElementById('resultCard').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 显示错误提示
+        function showError(msg) {
+            const toast = document.getElementById('errorToast');
+            toast.textContent = msg;
+            toast.classList.add('visible');
+            setTimeout(() => {
+                toast.classList.remove('visible');
+            }, 3000);
+        }
+
+        // 页面加载时初始化
+        loadRandomQuestion();
+    </script>
+</body>
+</html>

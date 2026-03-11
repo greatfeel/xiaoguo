@@ -265,9 +265,81 @@
         let ttsQueue = [];
         let ttsPlaying = false;
         let ttsCurrentIdx = -1;
+        let ttsRequestToken = 0;
+        let ttsVoices = [];
+
+        function loadTtsVoices() {
+            if (!ttsSupported) return;
+            ttsVoices = window.speechSynthesis.getVoices() || [];
+        }
+
+        function pickPreferredVoice(lang) {
+            if (!ttsVoices.length) return null;
+
+            const isEn = lang === 'en';
+            const preferredKeywords = isEn
+                ? ['Samantha', 'Daniel', 'Google US English', 'Alex', 'en-US']
+                : ['Tingting', 'Sinji', 'Meijia', 'Google 普通话', 'Chinese', 'zh-CN'];
+
+            for (let i = 0; i < preferredKeywords.length; i++) {
+                const kw = preferredKeywords[i].toLowerCase();
+                const found = ttsVoices.find(v =>
+                    (v.name || '').toLowerCase().includes(kw)
+                    || (v.lang || '').toLowerCase().includes(kw)
+                );
+                if (found) return found;
+            }
+
+            return ttsVoices.find(v => (v.lang || '').toLowerCase().startsWith(isEn ? 'en' : 'zh')) || null;
+        }
+
+        function normalizeTtsText(raw, lang) {
+            if (!raw) return '';
+            return raw
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/https?:\/\/\S+/g, ' ')
+                .replace(/\s+/g, ' ')
+                .replace(/[\[\]{}|*_#`~]/g, ' ')
+                .replace(/\s+([,.;!?，。！？：；])/g, '$1')
+                .replace(/([。！？!?])(?=[^\s])/g, '$1 ')
+                .replace(/([.;；:：])(?=[^\s])/g, '$1 ')
+                .trim();
+        }
+
+        function splitTtsChunks(text, lang, maxLen = 180) {
+            if (!text) return [];
+
+            const sentenceRegex = lang === 'en'
+                ? /[^.!?;:]+[.!?;:]?/g
+                : /[^。！？；：]+[。！？；：]?/g;
+            const sentences = text.match(sentenceRegex) || [text];
+
+            const chunks = [];
+            let current = '';
+            for (let i = 0; i < sentences.length; i++) {
+                const s = sentences[i].trim();
+                if (!s) continue;
+
+                if (!current) {
+                    current = s;
+                    continue;
+                }
+
+                if ((current + ' ' + s).length <= maxLen) {
+                    current += ' ' + s;
+                } else {
+                    chunks.push(current);
+                    current = s;
+                }
+            }
+
+            if (current) chunks.push(current);
+            return chunks;
+        }
 
         function ttsStop() {
             if (!ttsSupported) return;
+            ttsRequestToken += 1;
             window.speechSynthesis.cancel();
             ttsPlaying = false;
             ttsCurrentIdx = -1;
@@ -287,40 +359,66 @@
             const item = ttsQueue[idx];
             const lang = item.getLang();
             const title = lang === 'en' ? (item.article.title_en || item.article.title) : item.article.title;
-            const plain = (lang === 'en' ? (item.article.content_en || item.article.content) : item.article.content)
-                .replace(/<[^>]+>/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim();
+            const bodyRaw = lang === 'en' ? (item.article.content_en || item.article.content) : item.article.content;
+            const plain = normalizeTtsText(bodyRaw, lang);
+            const fullText = normalizeTtsText(title + (lang === 'en' ? '. ' : '。') + plain, lang);
+            const chunks = splitTtsChunks(fullText, lang);
 
-            const utter = new SpeechSynthesisUtterance((title + '. ' + plain).slice(0, 4000));
-            utter.lang = lang === 'en' ? 'en-US' : 'zh-CN';
-            utter.rate = 1;
+            if (!chunks.length) return;
+
+            const token = ++ttsRequestToken;
+            const voice = pickPreferredVoice(lang);
 
             ttsCurrentIdx = idx;
             ttsPlaying = true;
             item.btn.textContent = '⏸';
             item.btn.classList.add('playing');
 
-            utter.onend = () => {
-                if (ttsCurrentIdx === idx) {
-                    ttsPlaying = false;
-                    ttsCurrentIdx = -1;
-                    item.btn.textContent = '▶';
-                    item.btn.classList.remove('playing');
-                }
-            };
+            let chunkIdx = 0;
 
-            utter.onerror = () => {
-                if (ttsCurrentIdx === idx) {
+            const speakNext = () => {
+                if (token !== ttsRequestToken) return;
+
+                if (chunkIdx >= chunks.length) {
                     ttsPlaying = false;
                     ttsCurrentIdx = -1;
                     item.btn.textContent = '▶';
                     item.btn.classList.remove('playing');
+                    return;
                 }
+
+                const utter = new SpeechSynthesisUtterance(chunks[chunkIdx]);
+                utter.lang = lang === 'en' ? 'en-US' : 'zh-CN';
+                utter.rate = lang === 'en' ? 0.94 : 1.02;
+                utter.pitch = lang === 'en' ? 1.0 : 0.98;
+                utter.volume = 1;
+                if (voice) utter.voice = voice;
+
+                utter.onend = () => {
+                    if (token !== ttsRequestToken) return;
+                    chunkIdx += 1;
+                    // 分段之间稍作停顿，降低机器感。
+                    setTimeout(speakNext, 70);
+                };
+
+                utter.onerror = () => {
+                    if (token !== ttsRequestToken) return;
+                    ttsPlaying = false;
+                    ttsCurrentIdx = -1;
+                    item.btn.textContent = '▶';
+                    item.btn.classList.remove('playing');
+                };
+
+                window.speechSynthesis.speak(utter);
             };
 
             window.speechSynthesis.cancel();
-            window.speechSynthesis.speak(utter);
+            speakNext();
+        }
+
+        if (ttsSupported) {
+            loadTtsVoices();
+            window.speechSynthesis.onvoiceschanged = loadTtsVoices;
         }
 
         function hasAnyNews(data) {

@@ -5,8 +5,10 @@
 
 import os
 import re
+import json
 import sqlite3
 import logging
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +30,9 @@ NEWS_DIR = Path(__file__).parent / "news"
 # 任务数据库路径
 DB_PATH = Path(__file__).parent / "tasks.db"
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
+
+# 作文题目文件路径
+ESSAY_XLS_PATH = Path(__file__).parent / "高考作文题目汇总.xls"
 
 
 def _load_config() -> dict:
@@ -566,6 +571,176 @@ def api_tasks_delete(task_id: int):
 
     conn.close()
     return jsonify({"message": "Task deleted"})
+
+
+# ── 作文 API 路由 ──────────────────────────────────────────
+
+
+def _load_essay_questions():
+    """从 XLS 文件加载作文题目，支持 pandas 和 xlrd 回退。"""
+    questions = []
+    if not ESSAY_XLS_PATH.exists():
+        logger.warning(f"作文题目文件不存在: {ESSAY_XLS_PATH}")
+        return questions
+
+    try:
+        # 优先尝试使用 pandas
+        import pandas as pd
+        df = pd.read_excel(ESSAY_XLS_PATH)
+        for _, row in df.iterrows():
+            title = str(row.get('题目标题', '')).strip()
+            content = str(row.get('题目内容', '')).strip()
+            if title and content:
+                questions.append({'title': title, 'content': content})
+        logger.info(f"使用 pandas 加载了 {len(questions)} 道作文题目")
+        return questions
+    except ImportError:
+        pass  # pandas 未安装，使用 xlrd
+    except Exception as e:
+        logger.warning(f"pandas 加载失败，尝试 xlrd: {e}")
+
+    try:
+        # 回退到 xlrd
+        import xlrd
+        wb = xlrd.open_workbook(ESSAY_XLS_PATH)
+        sheet = wb.sheet_by_index(0)
+
+        # 查找列索引
+        header_row = 0
+        title_col = None
+        content_col = None
+
+        for col in range(sheet.ncols):
+            cell_value = str(sheet.cell_value(header_row, col)).strip()
+            if cell_value == '题目标题':
+                title_col = col
+            elif cell_value == '题目内容':
+                content_col = col
+
+        if title_col is None or content_col is None:
+            logger.warning("无法找到题目标题或题目内容列")
+            return questions
+
+        # 读取数据行
+        for row in range(1, sheet.nrows):
+            title = str(sheet.cell_value(row, title_col)).strip()
+            content = str(sheet.cell_value(row, content_col)).strip()
+            if title and content:
+                questions.append({'title': title, 'content': content})
+
+        logger.info(f"使用 xlrd 加载了 {len(questions)} 道作文题目")
+        return questions
+
+    except Exception as e:
+        logger.error(f"加载作文题目失败: {e}")
+        return questions
+
+
+# 加载作文题目
+_essay_questions = _load_essay_questions()
+
+
+def _get_translator():
+    """获取翻译器实例，用于调用大模型。"""
+    config = _load_config()
+    try:
+        return Translator(config)
+    except Exception as exc:
+        logger.error(f"Translator init failed: {exc}")
+        return None
+
+
+@app.route("/essay")
+def essay_page():
+    """作文宝页面：作文提纲测试模块。"""
+    return render_template("essay.html")
+
+
+@app.route("/api/essay/random")
+def api_essay_random():
+    """随机抽取一道作文题目。"""
+    if not _essay_questions:
+        return jsonify({"error": "题目库为空"}), 500
+
+    question = random.choice(_essay_questions)
+    return jsonify({
+        "title": question['title'],
+        "content": question['content']
+    })
+
+
+@app.route("/api/essay/questions")
+def api_essay_questions():
+    """获取所有作文题目列表。"""
+    return jsonify({"questions": _essay_questions})
+
+
+ESSAY_GRADING_PROMPT = '''你是一位资深高考作文阅卷老师。请对以下学生的作文大纲进行评分和点评。
+
+作文题目：
+{question_title}
+{question_content}
+
+学生提交的作文大纲：
+{outline}
+
+请以 10 分为基准进行评分，并给出详细评价。请按以下格式输出：
+
+【得分】X.X/10
+
+【评判意见】
+- 优点：...
+- 不足：...
+
+【改进建议】
+...
+
+【参考大纲】
+请提供一个优秀的大纲范例，结构参考：
+一、引论（...）
+二、本论（...）
+三、结论（...）
+
+请用中文回答，保持专业、客观、建设性的语气。'''
+
+
+@app.route("/api/essay/grade", methods=["POST"])
+def api_essay_grade():
+    """调用大模型对作文大纲进行评分。"""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "无效请求"}), 400
+
+    question_title = data.get("question_title", "")
+    question_content = data.get("question_content", "")
+    outline = data.get("outline", "")
+
+    if not outline or not question_title:
+        return jsonify({"error": "缺少必要参数"}), 400
+
+    translator = _get_translator()
+    if not translator:
+        return jsonify({"error": "评分服务暂不可用"}), 503
+
+    try:
+        prompt = ESSAY_GRADING_PROMPT.format(
+            question_title=question_title,
+            question_content=question_content,
+            outline=outline
+        )
+
+        message = translator.client.messages.create(
+            model=translator.model,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        result = translator._get_text_from_response(message).strip()
+        return jsonify({"result": result})
+
+    except Exception as exc:
+        logger.error(f"评分失败: {exc}")
+        return jsonify({"error": f"评分失败: {str(exc)}"}), 500
 
 
 # ── 启动 ──────────────────────────────────────────────

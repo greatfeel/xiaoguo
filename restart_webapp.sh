@@ -34,6 +34,7 @@ fi
 
 echo "[INFO] Starting new webapp.py process in background..."
 
+source .venv/bin/activate
 # Run in background and write stdout/stderr to one log file.
 nohup $APP_CMD >> "$LOG_FILE" 2>&1 &
 NEW_PID=$!
