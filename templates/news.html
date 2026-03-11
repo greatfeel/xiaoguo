@@ -194,6 +194,46 @@
             font-size: 13px;
             margin: 0 12px;
         }
+        /* 语言 Tab 切换器 */
+        .lang-tabs {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .lang-tab {
+            padding: 3px 10px;
+            font-size: 12px;
+            border-radius: 12px;
+            border: 1px solid #d0d7de;
+            background: none;
+            cursor: pointer;
+            color: #555;
+            -webkit-appearance: none;
+            -webkit-tap-highlight-color: rgba(102,126,234,0.1);
+            transition: background 0.15s, color 0.15s;
+        }
+        .lang-tab.active {
+            background: #667eea;
+            border-color: #667eea;
+            color: white;
+        }
+        .tts-btn {
+            margin-left: auto;
+            padding: 3px 10px;
+            font-size: 12px;
+            border-radius: 12px;
+            border: 1px solid #d0d7de;
+            background: none;
+            cursor: pointer;
+            color: #555;
+            -webkit-appearance: none;
+            -webkit-tap-highlight-color: rgba(102,126,234,0.1);
+        }
+        .tts-btn.playing {
+            border-color: #e74c3c;
+            color: #e74c3c;
+        }
     </style>
 </head>
 <body>
@@ -276,6 +316,8 @@
 
         // 渲染一天的新闻
         function renderDay(data) {
+            ttsQueue = [];  // 重置队列
+
             const dayEl = document.createElement('div');
             dayEl.className = 'day-section';
 
@@ -310,37 +352,82 @@
                 return;
             }
 
-            for (const article of articles) {
+            for (let i = 0; i < articles.length; i++) {
+                const article = articles[i];
                 const card = document.createElement('div');
                 card.className = 'news-card';
+                const hasBilingual = !!(article.title_en && article.content_en);
+
+                let currentLang = hasBilingual ? 'en' : 'zh';
+
+                // 语言 Tab 行
+                const langTabs = document.createElement('div');
+                langTabs.className = 'lang-tabs';
+
+                const enBtn = document.createElement('button');
+                enBtn.className = 'lang-tab' + (currentLang === 'en' ? ' active' : '');
+                enBtn.textContent = 'EN';
+                if (!hasBilingual) enBtn.style.display = 'none';
+
+                const zhBtn = document.createElement('button');
+                zhBtn.className = 'lang-tab' + (currentLang === 'zh' ? ' active' : '');
+                zhBtn.textContent = '中文';
+
+                const ttsBtn = document.createElement('button');
+                ttsBtn.className = 'tts-btn';
+                ttsBtn.textContent = '▶';
+                if (!ttsSupported) ttsBtn.style.display = 'none';
+
+                langTabs.appendChild(enBtn);
+                langTabs.appendChild(zhBtn);
+                langTabs.appendChild(ttsBtn);
+                card.appendChild(langTabs);
 
                 // 标题
                 const titleEl = document.createElement('h3');
-                titleEl.textContent = article.title;
+                function updateTitle() {
+                    titleEl.textContent = currentLang === 'en'
+                        ? (article.title_en || article.title)
+                        : article.title;
+                }
+                updateTitle();
                 card.appendChild(titleEl);
 
                 // 内容
                 const summaryEl = document.createElement('div');
                 summaryEl.className = 'summary';
-                const needCollapse = article.content.length > 300;
-                if (needCollapse) {
-                    summaryEl.classList.add('collapsed');
+
+                function updateContent() {
+                    const html = currentLang === 'en'
+                        ? (article.content_en || article.content)
+                        : article.content;
+                    if (html.length > 300) summaryEl.classList.add('collapsed');
+                    else summaryEl.classList.remove('collapsed');
+                    safeSetHTML(summaryEl, html);
                 }
-                safeSetHTML(summaryEl, article.content);
+                updateContent();
                 card.appendChild(summaryEl);
 
-                // 展开/收起按钮
-                if (needCollapse) {
-                    const toggleBtn = document.createElement('button');
-                    toggleBtn.className = 'toggle-btn';
-                    toggleBtn.textContent = '展开全文';
-                    toggleBtn.addEventListener('click', () => {
-                        const isCollapsed = summaryEl.classList.contains('collapsed');
-                        summaryEl.classList.toggle('collapsed');
-                        toggleBtn.textContent = isCollapsed ? '收起' : '展开全文';
-                    });
-                    card.appendChild(toggleBtn);
+                // 展开/收起
+                const toggleBtn = document.createElement('button');
+                toggleBtn.className = 'toggle-btn';
+                function updateToggle() {
+                    const html = currentLang === 'en'
+                        ? (article.content_en || article.content)
+                        : article.content;
+                    if (html.length > 300) {
+                        toggleBtn.style.display = 'block';
+                        toggleBtn.textContent = summaryEl.classList.contains('collapsed') ? '展开全文' : '收起';
+                    } else {
+                        toggleBtn.style.display = 'none';
+                    }
                 }
+                updateToggle();
+                toggleBtn.addEventListener('click', () => {
+                    summaryEl.classList.toggle('collapsed');
+                    toggleBtn.textContent = summaryEl.classList.contains('collapsed') ? '展开全文' : '收起';
+                });
+                card.appendChild(toggleBtn);
 
                 // 原文链接
                 if (article.link) {
@@ -354,6 +441,39 @@
                     meta.appendChild(link);
                     card.appendChild(meta);
                 }
+
+                // Tab 切换事件
+                enBtn.addEventListener('click', () => {
+                    currentLang = 'en';
+                    enBtn.classList.add('active'); zhBtn.classList.remove('active');
+                    updateTitle(); updateContent(); updateToggle();
+                });
+                zhBtn.addEventListener('click', () => {
+                    currentLang = 'zh';
+                    zhBtn.classList.add('active'); enBtn.classList.remove('active');
+                    updateTitle(); updateContent(); updateToggle();
+                });
+
+                // TTS 注册到队列
+                const queueIdx = ttsQueue.length;
+                ttsQueue.push({ article, getLang: () => currentLang, btn: ttsBtn });
+
+                ttsBtn.addEventListener('click', () => {
+                    if (ttsPlaying && ttsCurrentIdx === queueIdx) {
+                        window.speechSynthesis.pause();
+                        ttsPlaying = false;
+                        ttsBtn.textContent = '▶';
+                        ttsBtn.classList.remove('playing');
+                    } else if (!ttsPlaying && ttsCurrentIdx === queueIdx && window.speechSynthesis.paused) {
+                        window.speechSynthesis.resume();
+                        ttsPlaying = true;
+                        ttsBtn.textContent = '⏸';
+                        ttsBtn.classList.add('playing');
+                    } else {
+                        ttsStop();
+                        ttsPlayAt(queueIdx);
+                    }
+                });
 
                 parent.appendChild(card);
             }
