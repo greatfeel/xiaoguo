@@ -10,7 +10,13 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import yaml
+from dotenv import load_dotenv
+
 from flask import Flask, jsonify, render_template, abort, redirect, request
+
+from translator import Translator
+from saver import HTMLSaver
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +27,31 @@ NEWS_DIR = Path(__file__).parent / "news"
 
 # 任务数据库路径
 DB_PATH = Path(__file__).parent / "tasks.db"
+CONFIG_PATH = Path(__file__).parent / "config.yaml"
+
+
+def _load_config() -> dict:
+    """加载配置文件并替换环境变量。"""
+    if not CONFIG_PATH.exists():
+        return {
+            "ANTHROPIC_MODEL": "claude-sonnet-4-20250514",
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+            "ANTHROPIC_AUTH_TOKEN": "${ANTHROPIC_API_KEY}",
+            "OUTPUT_DIR": "news",
+        }
+
+    config_str = CONFIG_PATH.read_text(encoding="utf-8")
+    for key, value in os.environ.items():
+        config_str = config_str.replace(f"${{{key}}}", value)
+    return yaml.safe_load(config_str) or {}
+
+
+# 初始化环境变量与配置
+load_dotenv()
+APP_CONFIG = _load_config()
+_HTML_SAVER = HTMLSaver(APP_CONFIG)
+_TRANSLATOR: Optional[Translator] = None
+_TRANSLATOR_INIT_FAILED = False
 
 
 def _init_db():
@@ -44,6 +75,29 @@ def _init_db():
 
 # Initialize on startup
 _init_db()
+
+
+def _contains_chinese(text: str) -> bool:
+    """判断文本是否包含中文字符。"""
+    return bool(text and re.search(r"[\u4e00-\u9fff]", text))
+
+
+def _get_translator() -> Optional[Translator]:
+    """惰性初始化翻译器，避免启动时阻塞。"""
+    global _TRANSLATOR, _TRANSLATOR_INIT_FAILED
+
+    if _TRANSLATOR is not None:
+        return _TRANSLATOR
+    if _TRANSLATOR_INIT_FAILED:
+        return None
+
+    try:
+        _TRANSLATOR = Translator(APP_CONFIG)
+        return _TRANSLATOR
+    except Exception as exc:
+        logger.warning("翻译器初始化失败，将跳过英文补全: %s", exc)
+        _TRANSLATOR_INIT_FAILED = True
+        return None
 
 
 def _parse_news_html(file_path: Path) -> Optional[dict]:
@@ -80,6 +134,10 @@ def _parse_news_html(file_path: Path) -> Optional[dict]:
     source_match = re.search(r'class="source-tag"[^>]*>(.*?)</span>', text, re.DOTALL)
     source = source_match.group(1).strip() if source_match else ""
 
+    # 提取页面语言标记
+    lang_match = re.search(r'<html[^>]*lang="([^"]+)"', text, re.DOTALL)
+    html_lang = lang_match.group(1).strip().lower() if lang_match else ""
+
     # 提取日期
     date_match = re.search(r'class="date"[^>]*>(.*?)</div>', text, re.DOTALL)
     date_text = date_match.group(1).strip() if date_match else ""
@@ -103,10 +161,115 @@ def _parse_news_html(file_path: Path) -> Optional[dict]:
         "date": date_text,
         "link": link,
         "filename": file_path.name,
+        "html_lang": html_lang,
     }
 
 
-def _get_available_dates() -> list[str]:
+def _detect_article_lang(article: dict) -> str:
+    """基于页面标记和内容特征识别语言。"""
+    filename = article.get("filename", "")
+    if filename.endswith("_en.html"):
+        return "en"
+
+    html_lang = article.get("html_lang", "")
+    if html_lang.startswith("en"):
+        return "en"
+    if html_lang.startswith("zh"):
+        # 历史数据里 lang 可能始终是 zh-CN，需继续用文本判断兜底
+        pass
+
+    title = article.get("title", "")
+    content = article.get("content", "")
+    if _contains_chinese(title) or _contains_chinese(content):
+        return "zh"
+    return "en"
+
+
+def _article_group_key(file_path: Path, article: dict) -> str:
+    """生成中英配对分组键，优先使用原文链接。"""
+    link = (article.get("link") or "").strip()
+    if link:
+        return f"link::{link}"
+
+    stem = file_path.stem
+    if stem.endswith("_en"):
+        stem = stem[:-3]
+    return f"file::{stem}"
+
+
+def _write_english_cache(zh_file: Path, article_en: dict, source: str, date: str):
+    """将英文翻译结果缓存为 _en.html，减少重复翻译。"""
+    try:
+        en_file = zh_file.with_name(f"{zh_file.stem}_en.html")
+        if en_file.exists():
+            return
+
+        en_item = {
+            "title": article_en.get("title_en") or article_en.get("title") or "",
+            "content": article_en.get("content_en") or article_en.get("content") or "",
+            "link": article_en.get("link", ""),
+        }
+        html = _HTML_SAVER._generate_html(en_item, source, date, lang="en")
+        en_file.write_text(html, encoding="utf-8")
+    except Exception as exc:
+        logger.warning("英文缓存写入失败 %s: %s", zh_file, exc)
+
+
+def _try_translate_idaily_to_en(dir_path: Path, article: dict, date: str) -> dict:
+    """为 iDaily 中文文章补齐英文内容。"""
+    if article.get("title_en") and article.get("content_en"):
+        return article
+
+    translator = _get_translator()
+    if translator is None:
+        return article
+
+    try:
+        translated = translator.translate_news_zh_to_en({
+            "title": article.get("title", ""),
+            "content": article.get("content", ""),
+            "description": article.get("content", ""),
+            "link": article.get("link", ""),
+        })
+
+        title_en = translated.get("title_en", "")
+        content_en = translated.get("content_en", "")
+        if not title_en or not content_en:
+            return article
+
+        article["title_en"] = title_en
+        article["content_en"] = content_en
+
+        zh_filename = article.get("filename")
+        if zh_filename:
+            zh_file = dir_path / zh_filename
+            if zh_file.exists():
+                _write_english_cache(zh_file, article, "idaily", date)
+
+        return article
+    except Exception as exc:
+        logger.warning("iDaily 英文翻译失败: %s", exc)
+        return article
+
+
+def _date_has_news(date: str) -> bool:
+    """检查某天是否存在可展示的新闻。"""
+    for source_path in [
+        NEWS_DIR / "kagi" / "science" / date,
+        NEWS_DIR / "kagi" / "tech" / date,
+        NEWS_DIR / "idaily" / date,
+    ]:
+        if source_path.is_dir():
+            primary_files = [
+                f for f in source_path.glob("*.html")
+                if not f.stem.endswith("_en")
+            ]
+            if primary_files:
+                return True
+    return False
+
+
+def _get_available_dates(only_with_news: bool = False) -> list[str]:
     """获取所有可用的新闻日期，按降序排列。
 
     扫描所有新闻源目录，汇总去重后排序。
@@ -125,7 +288,10 @@ def _get_available_dates() -> list[str]:
             for d in source_path.iterdir():
                 if d.is_dir() and re.match(r"\d{4}-\d{2}-\d{2}", d.name):
                     dates.add(d.name)
-    return sorted(dates, reverse=True)
+    sorted_dates = sorted(dates, reverse=True)
+    if not only_with_news:
+        return sorted_dates
+    return [d for d in sorted_dates if _date_has_news(d)]
 
 
 def _find_date_with_news(start_date: str = None) -> Optional[str]:
@@ -151,46 +317,10 @@ def _find_date_with_news(start_date: str = None) -> Optional[str]:
         if date > start_date:
             continue
 
-        # 检查这个日期是否有任何新闻
-        has_news = False
-        for source_path in [
-            NEWS_DIR / "kagi" / "science" / date,
-            NEWS_DIR / "kagi" / "tech" / date,
-            NEWS_DIR / "idaily" / date,
-        ]:
-            if source_path.is_dir():
-                zh_files = [
-                    f for f in source_path.glob("*.html")
-                    if not f.stem.endswith("_en")
-                    and re.search(r"[\u4e00-\u9fff]", f.stem)
-                ]
-                if zh_files:
-                    has_news = True
-                    break
-
-        if has_news:
+        if _date_has_news(date):
             return date
 
     return None
-
-
-def _find_en_file(dir_path: Path, zh_files_sorted: list, zh_index: int) -> Optional[Path]:
-    """查找与指定中文文件配对的英文版本文件（_en.html）。
-
-    使用排序索引匹配，因为 saver 保持原始顺序保存中英文文件。
-
-    Args:
-        dir_path: 目录路径
-        zh_files_sorted: 排序后的中文文件列表
-        zh_index: 当前文件在 zh_files_sorted 中的索引
-
-    Returns:
-        英文版文件路径，不存在则返回 None
-    """
-    en_files = sorted(dir_path.glob("*_en.html"))
-    if not en_files or zh_index >= len(en_files):
-        return None
-    return en_files[zh_index]
 
 
 def _get_news_for_date(date: str) -> dict:
@@ -215,27 +345,58 @@ def _get_news_for_date(date: str) -> dict:
         if not dir_path.is_dir():
             continue
 
-        # 收集所有中文命名的文件，排序
-        zh_files = sorted([
-            f for f in dir_path.glob("*.html")
-            if not f.stem.endswith("_en")
-            and re.search(r"[\u4e00-\u9fff]", f.stem)
-        ])
+        files = sorted(dir_path.glob("*.html"))
+        grouped: dict[str, dict] = {}
+        order: list[str] = []
 
-        for idx, html_file in enumerate(zh_files):
+        for html_file in files:
             article = _parse_news_html(html_file)
             if not article:
                 continue
 
-            # 尝试加载对应的英文版本
-            en_file = _find_en_file(dir_path, zh_files, idx)
-            if en_file:
-                en_article = _parse_news_html(en_file)
-                if en_article:
-                    article['title_en'] = en_article['title']
-                    article['content_en'] = en_article['content']
+            key = _article_group_key(html_file, article)
+            if key not in grouped:
+                grouped[key] = {"zh": None, "en": None}
+                order.append(key)
 
-            result[category].append(article)
+            lang = _detect_article_lang(article)
+            if lang == "en":
+                grouped[key]["en"] = article
+            else:
+                grouped[key]["zh"] = article
+
+        for key in order:
+            pair = grouped[key]
+            zh_article = pair.get("zh")
+            en_article = pair.get("en")
+
+            # 优先展示中文结构，确保已有清洗逻辑稳定。
+            base = zh_article or en_article
+            if not base:
+                continue
+
+            merged = {
+                "title": (zh_article or en_article).get("title", ""),
+                "content": (zh_article or en_article).get("content", ""),
+                "source": (zh_article or en_article).get("source", ""),
+                "date": (zh_article or en_article).get("date", ""),
+                "link": (zh_article or en_article).get("link", ""),
+                "filename": (zh_article or en_article).get("filename", ""),
+            }
+
+            if en_article:
+                merged["title_en"] = en_article.get("title", "")
+                merged["content_en"] = en_article.get("content", "")
+
+            # 英文单文件也允许展示，中文兜底为英文。
+            if not zh_article and en_article:
+                merged["title"] = en_article.get("title", "")
+                merged["content"] = en_article.get("content", "")
+
+            if category == "idaily":
+                merged = _try_translate_idaily_to_en(dir_path, merged, date)
+
+            result[category].append(merged)
 
     return result
 
@@ -276,8 +437,8 @@ def news_page():
 
 @app.route("/api/dates")
 def api_dates():
-    """返回所有可用日期列表。"""
-    dates = _get_available_dates()
+    """返回所有有新闻内容的可用日期列表。"""
+    dates = _get_available_dates(only_with_news=True)
     return jsonify({"dates": dates})
 
 

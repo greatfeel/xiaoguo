@@ -258,6 +258,76 @@
         let currentDateIndex = 0;
         let isLoading = false;
         let allLoaded = false;
+        const displayedDates = new Set();
+
+        // TTS 状态
+        const ttsSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+        let ttsQueue = [];
+        let ttsPlaying = false;
+        let ttsCurrentIdx = -1;
+
+        function ttsStop() {
+            if (!ttsSupported) return;
+            window.speechSynthesis.cancel();
+            ttsPlaying = false;
+            ttsCurrentIdx = -1;
+            for (let i = 0; i < ttsQueue.length; i++) {
+                const btn = ttsQueue[i].btn;
+                if (btn) {
+                    btn.textContent = '▶';
+                    btn.classList.remove('playing');
+                }
+            }
+        }
+
+        function ttsPlayAt(idx) {
+            if (!ttsSupported) return;
+            if (idx < 0 || idx >= ttsQueue.length) return;
+
+            const item = ttsQueue[idx];
+            const lang = item.getLang();
+            const title = lang === 'en' ? (item.article.title_en || item.article.title) : item.article.title;
+            const plain = (lang === 'en' ? (item.article.content_en || item.article.content) : item.article.content)
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            const utter = new SpeechSynthesisUtterance((title + '. ' + plain).slice(0, 4000));
+            utter.lang = lang === 'en' ? 'en-US' : 'zh-CN';
+            utter.rate = 1;
+
+            ttsCurrentIdx = idx;
+            ttsPlaying = true;
+            item.btn.textContent = '⏸';
+            item.btn.classList.add('playing');
+
+            utter.onend = () => {
+                if (ttsCurrentIdx === idx) {
+                    ttsPlaying = false;
+                    ttsCurrentIdx = -1;
+                    item.btn.textContent = '▶';
+                    item.btn.classList.remove('playing');
+                }
+            };
+
+            utter.onerror = () => {
+                if (ttsCurrentIdx === idx) {
+                    ttsPlaying = false;
+                    ttsCurrentIdx = -1;
+                    item.btn.textContent = '▶';
+                    item.btn.classList.remove('playing');
+                }
+            };
+
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(utter);
+        }
+
+        function hasAnyNews(data) {
+            return !!((data.science && data.science.length)
+                || (data.tech && data.tech.length)
+                || (data.idaily && data.idaily.length));
+        }
 
         /**
          * 安全地设置元素的 HTML 内容（使用 DOMPurify 清理）
@@ -273,15 +343,26 @@
         // 初始化：获取可用日期列表
         async function init() {
             try {
+                // 默认先请求“今天”，后端会自动回退到最近有新闻的一天
+                const today = new Date().toISOString().slice(0, 10);
+                const firstRes = await fetch('/api/news/' + encodeURIComponent(today));
+                const firstData = await firstRes.json();
+
+                if (hasAnyNews(firstData)) {
+                    renderDay(firstData);
+                    displayedDates.add(firstData.actual_date || firstData.date);
+                }
+
                 const res = await fetch('/api/dates');
                 const data = await res.json();
-                allDates = data.dates;
-                if (allDates.length === 0) {
+                allDates = (data.dates || []).filter(d => !displayedDates.has(d));
+
+                if (!hasAnyNews(firstData) && allDates.length === 0) {
                     endEl.style.display = 'block';
                     endEl.textContent = '暂无新闻';
                     return;
                 }
-                await loadNextDay();
+
                 setupInfiniteScroll();
             } catch (err) {
                 container.textContent = '加载失败，请刷新重试';
@@ -304,7 +385,11 @@
             try {
                 const res = await fetch('/api/news/' + encodeURIComponent(date));
                 const data = await res.json();
-                renderDay(data);
+                const resolvedDate = data.actual_date || data.date;
+                if (hasAnyNews(data) && !displayedDates.has(resolvedDate)) {
+                    renderDay(data);
+                    displayedDates.add(resolvedDate);
+                }
                 currentDateIndex++;
             } catch (err) {
                 console.error('加载新闻失败:', err);
@@ -366,7 +451,7 @@
 
                 const enBtn = document.createElement('button');
                 enBtn.className = 'lang-tab' + (currentLang === 'en' ? ' active' : '');
-                enBtn.textContent = 'EN';
+                enBtn.textContent = '英文';
                 if (!hasBilingual) enBtn.style.display = 'none';
 
                 const zhBtn = document.createElement('button');
