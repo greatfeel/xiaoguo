@@ -196,13 +196,24 @@ HTML 内容：
             title_en = self._translate_zh_to_en(title) if title else ''
             content_en = self._translate_html_zh_to_en(content) if content else ''
 
-            return {
+            result = {
                 **news_item,
-                'title': title,              # 中文原标题
-                'content': content,          # 中文原内容
-                'title_en': title_en or title,
-                'content_en': content_en or content,
+                'title': title,
+                'content': content,
             }
+            if title_en:
+                result['title_en'] = title_en
+            if content_en:
+                result['content_en'] = content_en
+
+            description = news_item.get('description', '')
+            if description and description != content:
+                # description 与 content 不同，单独翻译
+                description_en = self._translate_zh_to_en(description) if description else ''
+                if description_en:
+                    result['description_en'] = description_en
+
+            return result
         except Exception as e:
             logger.error(f"Error translating news (zh->en): {e}")
             return news_item
