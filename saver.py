@@ -21,7 +21,7 @@ class HTMLSaver:
         self.date_format = config.get('DATE_FORMAT', '%Y-%m-%d')
 
     def save_news(self, news_item: Dict[str, Any], source: str, date: str = None) -> str:
-        """保存单条新闻为 HTML 文件，如有双语字段则同时保存英文版"""
+        """保存单条新闻为 HTML 文件，如有双语字段则同时保存英文版。返回主文件路径。"""
         if date is None:
             date = news_item.get('published', datetime.now().strftime(self.date_format))
 
@@ -50,7 +50,7 @@ class HTMLSaver:
             en_item = {**news_item, 'title': title_en, 'content': content_en}
             en_filename = self._generate_filename(title_en)
             en_file_path = os.path.join(dir_path, f"{en_filename}_en.html")
-            en_html = self._generate_html(en_item, source, date)
+            en_html = self._generate_html(en_item, source, date, lang='en')
             with open(en_file_path, 'w', encoding='utf-8') as f:
                 f.write(en_html)
             logger.info(f"Saved English version: {en_file_path}")
@@ -88,7 +88,7 @@ class HTMLSaver:
 
         return slug or f"news_{datetime.now().strftime('%H%M%S')}"
 
-    def _generate_html(self, news_item: Dict[str, Any], source: str, date: str) -> str:
+    def _generate_html(self, news_item: Dict[str, Any], source: str, date: str, lang: str = 'zh-CN') -> str:
         """生成新闻 HTML 页面"""
         title = news_item.get('title', '无标题')
         content = news_item.get('content', news_item.get('description', ''))
@@ -98,7 +98,7 @@ class HTMLSaver:
         cleaned_content = self._clean_html(content)
 
         html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="{lang}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
