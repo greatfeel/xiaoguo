@@ -65,7 +65,8 @@ def process_source(
     source: str,
     source_type: str,
     date: str = None,
-    need_translate: bool = True
+    need_translate: bool = True,
+    translate_to_en: bool = False,
 ) -> int:
     """处理单个新闻源
 
@@ -105,6 +106,10 @@ def process_source(
         logger.info(f"Archived {len(today_news)} original articles")
 
         translated_news = translator.translate_batch(today_news)
+    elif translator is not None and translate_to_en:
+        # iDaily: 中文->英文，生成双语版本
+        logger.info(f"Translating iDaily zh->en for {len(today_news)} items")
+        translated_news = translator.translate_batch_zh_to_en(today_news)
     else:
         translated_news = today_news
 
@@ -191,9 +196,10 @@ def main():
         if url:
             logger.info("Processing idaily...")
             count = process_source(
-                fetcher, None, saver,
+                fetcher, translator, saver,
                 url, 'idaily', 'idaily', date,
-                need_translate=False
+                need_translate=False,
+                translate_to_en=(translator is not None)
             )
             total_saved += count
             logger.info(f"Saved {count} files from idaily")
