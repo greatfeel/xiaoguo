@@ -406,6 +406,63 @@
             return url;
         }
 
+        // 预加载 TTS 音频（在后台静默加载）
+        async function preloadTtsAudio(article, lang, btn) {
+            if (!ttsSupported) return;
+
+            const title = lang === 'en' ? (article.title_en || article.title) : article.title;
+            const bodyRaw = lang === 'en' ? (article.content_en || article.content) : article.content;
+            const plain = normalizeTtsText(bodyRaw, lang);
+            const fullText = normalizeTtsText(title + (lang === 'en' ? '. ' : '。') + plain, lang);
+            if (!fullText) return;
+
+            const chunks = splitTtsChunks(fullText, lang, 220);
+            const finalText = chunks.join(lang === 'en' ? ' ' : '。');
+
+            // 检查是否已缓存
+            const key = lang + '::' + ttsStyle + '::' + finalText;
+            if (ttsUrlCache.has(key)) return;
+
+            try {
+                // 显示加载中状态
+                if (btn) {
+                    btn.dataset.preloading = 'true';
+                    btn.style.opacity = '0.6';
+                }
+
+                await fetchTtsAudioUrl(finalText, lang);
+
+                // 加载完成，更新按钮状态
+                if (btn) {
+                    btn.dataset.preloading = 'false';
+                    btn.dataset.preloaded = 'true';
+                    btn.style.opacity = '1';
+                }
+            } catch (err) {
+                console.error('TTS 预加载失败:', err);
+                if (btn) {
+                    btn.dataset.preloading = 'false';
+                    btn.style.opacity = '1';
+                }
+            }
+        }
+
+        // 批量预加载 TTS（只预加载前几条新闻）
+        function batchPreloadTts(articles, maxPreload = 3) {
+            if (!ttsSupported) return;
+
+            const preloadCount = Math.min(articles.length, maxPreload);
+            for (let i = 0; i < preloadCount; i++) {
+                const article = articles[i];
+                // 延迟一点再开始预加载，避免阻塞页面渲染
+                setTimeout(() => {
+                    // 预加载默认语言
+                    const lang = article.title_en ? 'en' : 'zh';
+                    preloadTtsAudio(article, lang, null);
+                }, i * 500);
+            }
+        }
+
         function ttsStop() {
             if (!ttsSupported) return;
             ttsRequestToken += 1;
@@ -452,8 +509,16 @@
             item.btn.classList.add('playing');
 
             try {
-                // 先加载音频 URL
-                const url = await fetchTtsAudioUrl(finalText, lang);
+                // 检查是否已预加载
+                const key = lang + '::' + ttsStyle + '::' + finalText;
+                let url = ttsUrlCache.get(key);
+
+                // 如果没有预加载，显示加载中状态
+                if (!url) {
+                    item.btn.textContent = '⏳';
+                    url = await fetchTtsAudioUrl(finalText, lang);
+                }
+
                 if (token !== ttsRequestToken) return;
 
                 // iOS Safari：需要先停止之前的音频
@@ -664,6 +729,9 @@
                 return;
             }
 
+            // 批量预加载前几篇文章的 TTS 音频
+            batchPreloadTts(articles, 3);
+
             for (let i = 0; i < articles.length; i++) {
                 const article = articles[i];
                 const card = document.createElement('div');
@@ -770,8 +838,13 @@
                 const queueIdx = ttsQueue.length;
                 ttsQueue.push({ article, getLang: () => currentLang, btn: ttsBtn });
 
+                // 单个预加载此文章的 TTS（延迟执行，避免阻塞渲染）
+                setTimeout(() => {
+                    preloadTtsAudio(article, currentLang, ttsBtn);
+                }, queueIdx * 300);
+
                 // TTS 按钮点击处理（必须在点击事件中直接调用 play 才能支持 iOS）
-                ttsBtn.addEventListener('click', () => {
+                ttsBtn.addEventListener('click', async () => {
                     // 初始化音频上下文（iOS 需要在用户交互中创建）
                     initTtsAudio();
 
@@ -799,11 +872,11 @@
                             }
                         } else {
                             ttsStop();
-                            ttsPlayAt(queueIdx);
+                            await ttsPlayAt(queueIdx);
                         }
                     } else {
                         ttsStop();
-                        ttsPlayAt(queueIdx);
+                        await ttsPlayAt(queueIdx);
                     }
                 });
 
