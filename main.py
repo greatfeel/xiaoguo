@@ -12,9 +12,11 @@ from typing import Dict, Any, List
 import yaml
 from dotenv import load_dotenv
 
+from pathlib import Path
 from fetcher import RSSFetcher
 from translator import Translator
 from saver import HTMLSaver
+from tts_generator import TTSGenerator
 
 
 def setup_logging(verbose: bool = False):
@@ -67,6 +69,7 @@ def process_source(
     date: str = None,
     need_translate: bool = True,
     translate_to_en: bool = False,
+    tts_gen=None,
 ) -> int:
     """处理单个新闻源，逐条处理并立即保存
 
@@ -131,6 +134,22 @@ def process_source(
                 if translated:
                     saver.save_news(translated, source, actual_date)
                     logger.info(f"已保存翻译: {filename}")
+                    # 翻译完成后生成 zh/en 音频（使用 zh 标题的 stem）
+                    if tts_gen is not None:
+                        zh_stem = saver._generate_filename(translated.get('title', ''))
+                        dir_obj = Path(saver.output_dir) / source / actual_date
+                        tts_gen.generate_article_audio(
+                            title=translated.get('title', ''),
+                            content=translated.get('content', ''),
+                            lang='zh',
+                            output_path=dir_obj / f"{zh_stem}_zh.mp3",
+                        )
+                        tts_gen.generate_article_audio(
+                            title=translated.get('title_en', ''),
+                            content=translated.get('content_en', ''),
+                            lang='en',
+                            output_path=dir_obj / f"{zh_stem}_en.mp3",
+                        )
             except Exception as e:
                 logger.error(f"翻译失败 {filename}: {e}")
 
@@ -141,6 +160,22 @@ def process_source(
                 if translated:
                     saver.save_news(translated, source, actual_date)
                     logger.info(f"已保存英文版: {filename}")
+                    # 生成 zh/en 音频（stem 使用原始中文标题）
+                    if tts_gen is not None:
+                        zh_stem = saver._generate_filename(item.get('title', ''))
+                        dir_obj = Path(saver.output_dir) / source / actual_date
+                        tts_gen.generate_article_audio(
+                            title=item.get('title', ''),
+                            content=item.get('content', ''),
+                            lang='zh',
+                            output_path=dir_obj / f"{zh_stem}_zh.mp3",
+                        )
+                        tts_gen.generate_article_audio(
+                            title=translated.get('title_en', ''),
+                            content=translated.get('content_en', ''),
+                            lang='en',
+                            output_path=dir_obj / f"{zh_stem}_en.mp3",
+                        )
             except Exception as e:
                 logger.error(f"翻译失败 {filename}: {e}")
 
@@ -177,6 +212,11 @@ def main():
         action='store_true',
         help='不翻译，直接保存原文'
     )
+    parser.add_argument(
+        '--no-audio',
+        action='store_true',
+        help='不预生成 TTS 音频文件'
+    )
 
     args = parser.parse_args()
 
@@ -201,6 +241,7 @@ def main():
 
     # 如果需要翻译，初始化翻译器
     translator = None if args.no_translate else Translator(config)
+    tts_gen = None if args.no_audio else TTSGenerator(config)
 
     total_saved = 0
 
@@ -212,7 +253,8 @@ def main():
             count = process_source(
                 fetcher, translator, saver,
                 url, f'kagi/{key}', 'kagi', date,
-                need_translate=True
+                need_translate=True,
+                tts_gen=tts_gen,
             )
             total_saved += count
             logger.info(f"Saved {count} files from kagi/{key}")
@@ -227,7 +269,8 @@ def main():
                 fetcher, translator, saver,
                 url, 'idaily', 'idaily', date,
                 need_translate=False,
-                translate_to_en=(translator is not None)
+                translate_to_en=(translator is not None),
+                tts_gen=tts_gen,
             )
             total_saved += count
             logger.info(f"Saved {count} files from idaily")

@@ -13,3 +13,4 @@ news
 backup
 docs/superpowers
 tasks.db
+tts_cache/
