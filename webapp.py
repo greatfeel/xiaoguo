@@ -16,12 +16,12 @@ from typing import Optional
 import yaml
 from dotenv import load_dotenv
 
-from flask import Flask, jsonify, render_template, abort, redirect, request, Response
+from flask import Flask, jsonify, render_template, abort, redirect, request, Response, send_from_directory
 
-try:
-    import edge_tts
-except ImportError:
-    edge_tts = None
+from tts_generator import TTSGenerator as _TTSGenerator
+
+# 延迟初始化，配置加载后再创建
+_tts_gen: "_TTSGenerator | None" = None
 
 from translator import Translator
 from saver import HTMLSaver
@@ -61,6 +61,11 @@ def _load_config() -> dict:
 # 初始化环境变量与配置
 load_dotenv()
 APP_CONFIG = _load_config()
+try:
+    _tts_gen = _TTSGenerator(APP_CONFIG)
+except Exception as _tts_init_err:
+    logger.warning("TTSGenerator 初始化失败，TTS 功能不可用: %s", _tts_init_err)
+    _tts_gen = None
 _HTML_SAVER = HTMLSaver(APP_CONFIG)
 _TRANSLATOR: Optional[Translator] = None
 _TRANSLATOR_INIT_FAILED = False
@@ -110,76 +115,6 @@ def _get_translator() -> Optional[Translator]:
         logger.warning("翻译器初始化失败，将跳过英文补全: %s", exc)
         _TRANSLATOR_INIT_FAILED = True
         return None
-
-
-def _normalize_tts_text(text: str) -> str:
-    """清理 TTS 文本，减少噪声朗读。"""
-    if not text:
-        return ""
-
-    cleaned = re.sub(r"<[^>]+>", " ", text)
-    cleaned = re.sub(r"https?://\S+", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned.strip()
-
-
-async def _synthesize_edge_tts(text: str, lang: str) -> bytes:
-    """调用 Edge TTS 生成音频字节。"""
-    voice = APP_CONFIG.get(
-        "EDGE_TTS_VOICE_EN" if lang == "en" else "EDGE_TTS_VOICE_ZH",
-        "en-US-EmmaMultilingualNeural" if lang == "en" else "zh-CN-XiaoxiaoNeural",
-    )
-    rate = APP_CONFIG.get(
-        "EDGE_TTS_RATE_EN" if lang == "en" else "EDGE_TTS_RATE_ZH",
-        "-15%" if lang == "en" else "-8%",
-    )
-
-    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
-    chunks = []
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio":
-            chunks.append(chunk.get("data", b""))
-    return b"".join(chunks)
-
-
-def _resolve_tts_profile(lang: str, style: str) -> tuple[str, str]:
-    """根据语言与风格选择 voice/rate。"""
-    style = (style or "standard").lower()
-    if style not in ["standard", "gentle", "broadcast"]:
-        style = "standard"
-
-    # 默认 voice 与速率配置
-    if lang == "en":
-        style_defaults = {
-            "standard": ("en-US-EmmaMultilingualNeural", "-15%"),
-            "gentle": ("en-US-JennyNeural", "-25%"),
-            "broadcast": ("en-US-GuyNeural", "-10%"),
-        }
-    else:
-        style_defaults = {
-            "standard": ("zh-CN-XiaoxiaoNeural", "-8%"),
-            "gentle": ("zh-CN-XiaoyiNeural", "-18%"),
-            "broadcast": ("zh-CN-YunyangNeural", "-5%"),
-        }
-
-    voice, rate = style_defaults[style]
-
-    # 允许从配置覆盖风格 voice/rate
-    lang_key = "EN" if lang == "en" else "ZH"
-    voice = APP_CONFIG.get(f"EDGE_TTS_VOICE_{lang_key}_{style.upper()}", voice)
-    rate = APP_CONFIG.get(f"EDGE_TTS_RATE_{lang_key}_{style.upper()}", rate)
-    return voice, rate
-
-
-async def _synthesize_edge_tts_with_style(text: str, lang: str, style: str) -> bytes:
-    """按指定风格调用 Edge TTS。"""
-    voice, rate = _resolve_tts_profile(lang, style)
-    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
-    chunks = []
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio":
-            chunks.append(chunk.get("data", b""))
-    return b"".join(chunks)
 
 
 def _parse_news_html(file_path: Path) -> Optional[dict]:
@@ -478,6 +413,16 @@ def _get_news_for_date(date: str) -> dict:
             if category == "idaily":
                 merged = _try_translate_idaily_to_en(dir_path, merged, date)
 
+            # 注入预生成音频 URL（如果 MP3 文件已存在）
+            zh_stem = Path(merged["filename"]).stem
+            zh_mp3 = dir_path / f"{zh_stem}_zh.mp3"
+            en_mp3 = dir_path / f"{zh_stem}_en.mp3"
+            rel_dir = dir_path.relative_to(NEWS_DIR)
+            if zh_mp3.exists():
+                merged["audio_url_zh"] = f"/news-audio/{rel_dir}/{zh_stem}_zh.mp3"
+            if en_mp3.exists():
+                merged["audio_url_en"] = f"/news-audio/{rel_dir}/{zh_stem}_en.mp3"
+
             result[category].append(merged)
 
     return result
@@ -512,6 +457,12 @@ def tasks_page():
 def news_page():
     """热点新闻页面。"""
     return render_template("news.html")
+
+
+@app.route("/news-audio/<path:filepath>")
+def news_audio(filepath: str):
+    """服务预生成的 TTS MP3 文件（静态）。"""
+    return send_from_directory(NEWS_DIR, filepath, mimetype="audio/mpeg")
 
 
 # ── API 路由 ──────────────────────────────────────────
@@ -557,12 +508,12 @@ def api_news(date: str):
 
 @app.route("/api/tts", methods=["POST"])
 def api_tts():
-    """将文本转为音频（Edge TTS）。"""
-    if edge_tts is None:
-        return jsonify({"error": "edge-tts 未安装"}), 503
+    """将文本转为音频（Edge TTS），命中磁盘缓存则直接返回。"""
+    if _tts_gen is None:
+        return jsonify({"error": "TTS 不可用"}), 503
 
     payload = request.get_json(silent=True) or {}
-    text = _normalize_tts_text(payload.get("text", ""))
+    text = _TTSGenerator.normalize_text(payload.get("text", ""))
     lang = payload.get("lang", "zh")
     style = payload.get("style", "standard")
     if lang not in ["zh", "en"]:
@@ -571,22 +522,15 @@ def api_tts():
     if not text:
         return jsonify({"error": "文本不能为空"}), 400
 
-    # 防止超长请求导致响应过慢。
-    text = text[:2500]
+    audio_bytes = _tts_gen.synthesize_with_cache(text, lang, style)
+    if not audio_bytes:
+        return jsonify({"error": "TTS 生成失败"}), 500
 
-    try:
-        audio_bytes = asyncio.run(_synthesize_edge_tts_with_style(text, lang, style))
-        if not audio_bytes:
-            return jsonify({"error": "TTS 生成失败"}), 500
-
-        return Response(
-            audio_bytes,
-            mimetype="audio/mpeg",
-            headers={"Cache-Control": "no-store"},
-        )
-    except Exception as exc:
-        logger.warning("Edge TTS 调用失败: %s", exc)
-        return jsonify({"error": "TTS 服务暂时不可用"}), 500
+    return Response(
+        audio_bytes,
+        mimetype="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ── 任务 API 路由 ────────────────────────────────────────
