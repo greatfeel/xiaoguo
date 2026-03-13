@@ -447,19 +447,20 @@
             }
         }
 
-        // 批量预加载 TTS（只预加载前几条新闻）
+        // 批量预加载 TTS（仅对没有预生成 URL 的文章）
         function batchPreloadTts(articles, maxPreload = 3) {
             if (!ttsSupported) return;
-
-            const preloadCount = Math.min(articles.length, maxPreload);
-            for (let i = 0; i < preloadCount; i++) {
+            let queued = 0;
+            for (let i = 0; i < articles.length && queued < maxPreload; i++) {
                 const article = articles[i];
-                // 延迟一点再开始预加载，避免阻塞页面渲染
-                setTimeout(() => {
-                    // 预加载默认语言
-                    const lang = article.title_en ? 'en' : 'zh';
-                    preloadTtsAudio(article, lang, null);
-                }, i * 500);
+                const lang = article.title_en ? 'en' : 'zh';
+                // 当前风格是 standard 且已有预生成 URL，无需预加载
+                if (ttsStyle === 'standard' && (lang === 'zh' ? article.audio_url_zh : article.audio_url_en)) {
+                    continue;
+                }
+                const delay = queued * 300;
+                setTimeout(() => preloadTtsAudio(article, lang, null), delay);
+                queued++;
             }
         }
 
@@ -509,14 +510,22 @@
             item.btn.classList.add('playing');
 
             try {
-                // 检查是否已预加载
-                const key = lang + '::' + ttsStyle + '::' + finalText;
-                let url = ttsUrlCache.get(key);
+                // 优先使用预生成 MP3（仅 standard 风格）
+                const pregenUrl = ttsStyle === 'standard'
+                    ? (lang === 'en' ? item.article.audio_url_en : item.article.audio_url_zh)
+                    : null;
 
-                // 如果没有预加载，显示加载中状态
-                if (!url) {
-                    item.btn.textContent = '⏳';
-                    url = await fetchTtsAudioUrl(finalText, lang);
+                let url;
+                if (pregenUrl) {
+                    url = pregenUrl;  // 直接使用，零延迟
+                } else {
+                    // 检查内存缓存 → 否则请求 /api/tts（服务端有磁盘缓存，第二次也很快）
+                    const key = lang + '::' + ttsStyle + '::' + finalText;
+                    url = ttsUrlCache.get(key);
+                    if (!url) {
+                        item.btn.textContent = '⏳';
+                        url = await fetchTtsAudioUrl(finalText, lang);
+                    }
                 }
 
                 if (token !== ttsRequestToken) return;
