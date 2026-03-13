@@ -7,20 +7,29 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="format-detection" content="telephone=no">
     <title>热点新闻 - 小果</title>
+    <!-- DNS 预解析和预连接，加速首次加载 -->
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         html, body {
             -webkit-overflow-scrolling: touch;
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
             overscroll-behavior: contain;
+            /* Safari 性能优化 */
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
             background: #f0f2f5;
             color: #333;
             padding-bottom: calc(60px + env(safe-area-inset-bottom));
+            /* 防止 iOS 上的文本调整大小 */
+            -webkit-text-size-adjust: 100%;
         }
         /* 顶部导航 */
         .navbar {
@@ -280,7 +289,9 @@
         let ttsPlaying = false;
         let ttsCurrentIdx = -1;
         let ttsRequestToken = 0;
-        const ttsAudio = ttsSupported ? new Audio() : null;
+        // iOS Safari 需要特殊的音频处理
+        let ttsAudio = null;
+        let ttsAudioContext = null;
         const ttsUrlCache = new Map();
         const ttsStyles = ['standard', 'gentle', 'broadcast'];
         const ttsStyleLabels = {
@@ -290,6 +301,27 @@
         };
         let ttsStyle = localStorage.getItem('news_tts_style') || 'standard';
         if (!ttsStyles.includes(ttsStyle)) ttsStyle = 'standard';
+
+        // 初始化音频（iOS 需要在用户交互中初始化）
+        function initTtsAudio() {
+            if (!ttsSupported) return null;
+            if (ttsAudio) return ttsAudio;
+            ttsAudio = new Audio();
+            // iOS Safari 需要设置这些属性
+            ttsAudio.playsInline = true;
+            ttsAudio.preload = 'auto';
+            return ttsAudio;
+        }
+
+        // 检测是否为 iOS 设备
+        function isIOS() {
+            return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        }
+
+        // 检测是否为 Safari
+        function isSafari() {
+            return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        }
 
         function refreshTtsStyleButton() {
             if (!ttsStyleBtn) return;
@@ -377,8 +409,12 @@
         function ttsStop() {
             if (!ttsSupported) return;
             ttsRequestToken += 1;
-            ttsAudio.pause();
-            ttsAudio.currentTime = 0;
+            const audio = initTtsAudio();
+            if (audio) {
+                audio.pause();
+                audio.currentTime = 0;
+                audio.src = '';
+            }
             ttsPlaying = false;
             ttsCurrentIdx = -1;
             for (let i = 0; i < ttsQueue.length; i++) {
@@ -393,6 +429,10 @@
         async function ttsPlayAt(idx) {
             if (!ttsSupported) return;
             if (idx < 0 || idx >= ttsQueue.length) return;
+
+            // 确保音频已初始化（iOS 需要在点击事件中创建）
+            const audio = initTtsAudio();
+            if (!audio) return;
 
             const item = ttsQueue[idx];
             const lang = item.getLang();
@@ -412,25 +452,53 @@
             item.btn.classList.add('playing');
 
             try {
+                // 先加载音频 URL
                 const url = await fetchTtsAudioUrl(finalText, lang);
                 if (token !== ttsRequestToken) return;
 
-                ttsAudio.src = url;
-                ttsAudio.onended = () => {
+                // iOS Safari：需要先停止之前的音频
+                audio.pause();
+                audio.currentTime = 0;
+
+                audio.src = url;
+
+                // iOS 需要预加载
+                if (isIOS() || isSafari()) {
+                    try {
+                        audio.load();
+                    } catch (e) {
+                        console.log('Preload warning:', e);
+                    }
+                }
+
+                audio.onended = () => {
                     if (token !== ttsRequestToken) return;
                     ttsPlaying = false;
                     ttsCurrentIdx = -1;
                     item.btn.textContent = '▶';
                     item.btn.classList.remove('playing');
                 };
-                ttsAudio.onerror = () => {
+                audio.onerror = (e) => {
+                    console.error('Audio error:', e);
                     if (token !== ttsRequestToken) return;
                     ttsPlaying = false;
                     ttsCurrentIdx = -1;
                     item.btn.textContent = '▶';
                     item.btn.classList.remove('playing');
                 };
-                await ttsAudio.play();
+
+                // iOS Safari：play() 必须在用户点击处理程序中直接调用
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(err => {
+                        console.error('Play failed:', err);
+                        if (token !== ttsRequestToken) return;
+                        ttsPlaying = false;
+                        ttsCurrentIdx = -1;
+                        item.btn.textContent = '▶';
+                        item.btn.classList.remove('playing');
+                    });
+                }
             } catch (err) {
                 console.error('TTS 播放失败:', err);
                 ttsPlaying = false;
@@ -457,32 +525,74 @@
             });
         }
 
-        // 初始化：获取可用日期列表
+        // 显示加载状态的辅助函数
+        function showLoading() {
+            container.innerHTML = '';
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'loading';
+            const spinner = document.createElement('span');
+            spinner.className = 'spinner';
+            loadingDiv.appendChild(spinner);
+            loadingDiv.appendChild(document.createTextNode('加载中...'));
+            container.appendChild(loadingDiv);
+        }
+
+        function showError(message) {
+            container.innerHTML = '';
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'end-message';
+            errorDiv.textContent = message;
+            container.appendChild(errorDiv);
+        }
+
+        // 初始化：获取可用日期列表并加载新闻
         async function init() {
             try {
-                // 默认先请求“今天”，后端会自动回退到最近有新闻的一天
-                const today = new Date().toISOString().slice(0, 10);
-                const firstRes = await fetch('/api/news/' + encodeURIComponent(today));
-                const firstData = await firstRes.json();
+                // 显示加载状态
+                showLoading();
 
-                if (hasAnyNews(firstData)) {
-                    renderDay(firstData);
-                    displayedDates.add(firstData.actual_date || firstData.date);
+                const today = new Date().toISOString().slice(0, 10);
+
+                // 并行请求：同时获取日期列表和当天新闻，提高加载速度
+                const [datesRes, firstRes] = await Promise.all([
+                    fetch('/api/dates').catch(() => ({ json: async () => ({ dates: [] }) })),
+                    fetch('/api/news/' + encodeURIComponent(today)).catch(() => null)
+                ]);
+
+                // 处理日期列表
+                if (datesRes) {
+                    const datesData = await datesRes.json();
+                    allDates = (datesData.dates || []).filter(d => !displayedDates.has(d));
                 }
 
-                const res = await fetch('/api/dates');
-                const data = await res.json();
-                allDates = (data.dates || []).filter(d => !displayedDates.has(d));
-
-                if (!hasAnyNews(firstData) && allDates.length === 0) {
-                    endEl.style.display = 'block';
-                    endEl.textContent = '暂无新闻';
+                // 处理新闻数据
+                if (firstRes && firstRes.ok) {
+                    const firstData = await firstRes.json();
+                    if (hasAnyNews(firstData)) {
+                        container.innerHTML = ''; // 清除加载状态
+                        renderDay(firstData);
+                        displayedDates.add(firstData.actual_date || firstData.date);
+                    } else if (allDates.length > 0) {
+                        // 当天没有新闻，加载最近一天
+                        showLoading();
+                        await loadNextDay();
+                    } else {
+                        showError('暂无新闻');
+                        return;
+                    }
+                } else if (allDates.length > 0) {
+                    // 请求失败但有可用日期，尝试加载
+                    container.innerHTML = '';
+                    await loadNextDay();
+                } else {
+                    showError('加载失败，请刷新重试');
                     return;
                 }
 
                 setupInfiniteScroll();
             } catch (err) {
-                container.textContent = '加载失败，请刷新重试';
+                console.error('Init error:', err);
+                showError('加载失败，请刷新重试');
             }
         }
 
@@ -660,17 +770,37 @@
                 const queueIdx = ttsQueue.length;
                 ttsQueue.push({ article, getLang: () => currentLang, btn: ttsBtn });
 
+                // TTS 按钮点击处理（必须在点击事件中直接调用 play 才能支持 iOS）
                 ttsBtn.addEventListener('click', () => {
+                    // 初始化音频上下文（iOS 需要在用户交互中创建）
+                    initTtsAudio();
+
                     if (ttsPlaying && ttsCurrentIdx === queueIdx) {
-                        ttsAudio.pause();
+                        const audio = initTtsAudio();
+                        if (audio) {
+                            audio.pause();
+                        }
                         ttsPlaying = false;
                         ttsBtn.textContent = '▶';
                         ttsBtn.classList.remove('playing');
-                    } else if (!ttsPlaying && ttsCurrentIdx === queueIdx && ttsAudio.paused && ttsAudio.src) {
-                        ttsAudio.play();
-                        ttsPlaying = true;
-                        ttsBtn.textContent = '⏸';
-                        ttsBtn.classList.add('playing');
+                    } else if (!ttsPlaying && ttsCurrentIdx === queueIdx) {
+                        // 继续播放
+                        const audio = initTtsAudio();
+                        if (audio && audio.paused && audio.src) {
+                            const playPromise = audio.play();
+                            if (playPromise !== undefined) {
+                                playPromise.then(() => {
+                                    ttsPlaying = true;
+                                    ttsBtn.textContent = '⏸';
+                                    ttsBtn.classList.add('playing');
+                                }).catch(err => {
+                                    console.error('Resume failed:', err);
+                                });
+                            }
+                        } else {
+                            ttsStop();
+                            ttsPlayAt(queueIdx);
+                        }
                     } else {
                         ttsStop();
                         ttsPlayAt(queueIdx);
