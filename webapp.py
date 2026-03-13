@@ -462,6 +462,9 @@ def news_page():
 @app.route("/news-audio/<path:filepath>")
 def news_audio(filepath: str):
     """服务预生成的 TTS MP3 文件（静态）。"""
+    safe = (NEWS_DIR / filepath).resolve()
+    if safe.suffix != ".mp3" or not str(safe).startswith(str(NEWS_DIR.resolve())):
+        abort(404)
     return send_from_directory(NEWS_DIR, filepath, mimetype="audio/mpeg")
 
 

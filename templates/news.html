@@ -849,7 +849,11 @@
 
                 // 单个预加载此文章的 TTS（延迟执行，避免阻塞渲染）
                 setTimeout(() => {
-                    preloadTtsAudio(article, currentLang, ttsBtn);
+                    // 有预生成 URL 且当前为 standard 风格，无需预加载
+                    const pregenExists = ttsStyle === 'standard' && (currentLang === 'zh' ? article.audio_url_zh : article.audio_url_en);
+                    if (!pregenExists) {
+                        preloadTtsAudio(article, currentLang, ttsBtn);
+                    }
                 }, queueIdx * 300);
 
                 // TTS 按钮点击处理（必须在点击事件中直接调用 play 才能支持 iOS）
