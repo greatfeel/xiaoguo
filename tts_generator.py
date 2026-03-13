@@ -144,3 +144,52 @@ class TTSGenerator:
         output_path.write_bytes(audio_bytes)
         logger.info("已预生成音频: %s", output_path.name)
         return True
+
+    def generate_missing_for_dir(self, dir_path: Path) -> int:
+        """扫描目录，为已有 HTML 但缺少 MP3 的文章补全音频。返回生成数量。
+
+        命名规则：
+          - {stem}.html（非 _en 结尾）→ {stem}_zh.mp3（按 HTML lang 属性选语言）
+          - {stem}_en.html           → {stem}_en.mp3（固定 en 语言）
+        """
+        if edge_tts is None:
+            return 0
+
+        count = 0
+        for html_file in sorted(dir_path.glob("*.html")):
+            stem = html_file.stem
+            is_en_file = stem.endswith("_en")
+
+            if is_en_file:
+                mp3_path = html_file.with_suffix(".mp3")   # Some-Title_en.mp3
+                lang = "en"
+            else:
+                mp3_path = html_file.parent / f"{stem}_zh.mp3"
+                try:
+                    preview = html_file.read_text(encoding="utf-8")[:500]
+                    lang_m = re.search(r'<html[^>]*lang="([^"]+)"', preview)
+                    html_lang = lang_m.group(1).lower() if lang_m else "zh"
+                    lang = "en" if html_lang.startswith("en") else "zh"
+                except Exception:
+                    lang = "zh"
+
+            if mp3_path.exists():
+                continue
+
+            try:
+                text = html_file.read_text(encoding="utf-8")
+            except Exception as exc:
+                logger.warning("无法读取文件: %s (%s)", html_file.name, exc)
+                continue
+
+            title_m = re.search(r"<h1[^>]*>(.*?)</h1>", text, re.DOTALL)
+            title = re.sub(r"<[^>]+>", " ", title_m.group(1)).strip() if title_m else stem
+            content_m = re.search(
+                r'<div class="content">(.*?)</div>\s*</div>\s*</body>', text, re.DOTALL
+            )
+            content = content_m.group(1).strip() if content_m else ""
+
+            if self.generate_article_audio(title, content, lang, mp3_path):
+                count += 1
+
+        return count

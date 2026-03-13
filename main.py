@@ -179,6 +179,13 @@ def process_source(
             except Exception as e:
                 logger.error(f"翻译失败 {filename}: {e}")
 
+    # 补全目录中已有 HTML 但缺少音频的文章（幂等，跳过已存在的 MP3）
+    if tts_gen is not None:
+        dir_obj = Path(saver.output_dir) / source / actual_date
+        missing = tts_gen.generate_missing_for_dir(dir_obj)
+        if missing > 0:
+            logger.info(f"补全音频: {missing} 个")
+
     return saved_count
 
 

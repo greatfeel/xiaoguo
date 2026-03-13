@@ -416,12 +416,21 @@ def _get_news_for_date(date: str) -> dict:
             # 注入预生成音频 URL（如果 MP3 文件已存在）
             zh_stem = Path(merged["filename"]).stem
             zh_mp3 = dir_path / f"{zh_stem}_zh.mp3"
-            en_mp3 = dir_path / f"{zh_stem}_en.mp3"
             rel_dir = dir_path.relative_to(NEWS_DIR)
             if zh_mp3.exists():
                 merged["audio_url_zh"] = f"/news-audio/{rel_dir}/{zh_stem}_zh.mp3"
+
+            # en MP3：先找 pipeline 命名（{zh_stem}_en.mp3），
+            # 再找补全扫描命名（{en_html_stem}.mp3，如 Some-Title_en.mp3）
+            en_mp3 = dir_path / f"{zh_stem}_en.mp3"
+            if not en_mp3.exists() and en_article:
+                en_html_stem = Path(en_article.get("filename", "")).stem
+                if en_html_stem:
+                    retro = dir_path / f"{en_html_stem}.mp3"
+                    if retro.exists():
+                        en_mp3 = retro
             if en_mp3.exists():
-                merged["audio_url_en"] = f"/news-audio/{rel_dir}/{zh_stem}_en.mp3"
+                merged["audio_url_en"] = f"/news-audio/{rel_dir}/{en_mp3.name}"
 
             result[category].append(merged)
 
