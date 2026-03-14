@@ -448,12 +448,8 @@ def index():
 
 @app.route("/calendar")
 def calendar_page():
-    """高考日历页面：重定向到 Outlook 日历。
-
-    由于 Outlook 日历 iframe 存在跨域和沙箱限制问题（crypto_nonexistent），
-    无法在 iframe 中正常加载，改为直接重定向用户到 Outlook 日历页面。
-    """
-    return redirect("https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b3ff-bb52-4509-a9a2-c84ec7381e5b/cid-FF1DD0E83EAD4EF6/index.html", code=302)
+    """高考日历页面：嵌入 Teamup 日历。"""
+    return render_template("calendar.html")
 
 
 @app.route("/tasks")

@@ -74,3 +74,8 @@ https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b
 # 新闻模块的bug
 - 在 iphone 手机上面，打开新闻模块的链接，第一次打开的时候很慢
 - 目前播放语音有问题，点击之后无法播放
+
+# 2026-03-14-01
+# 修改日历模块
+去掉之前的 outlook 代码，改为嵌入以下的 iframe 代码
+<iframe src="https://teamup.com/ks9pi5rqzzs133uwh3?tz=Calendar%20default&showProfileAndInfo=0&showSidepanel=1&showViewHeader=1&showAgendaDetails=0&showDateControls=1&showDateRange=1" style="width: 100%; height: 600px; border: 1px solid #cccccc" loading="lazy" frameborder="0"></iframe>
