@@ -71,10 +71,13 @@ def process_source(
     translate_to_en: bool = False,
     tts_gen=None,
 ) -> int:
-    """处理单个新闻源，逐条处理并立即保存
+    """处理单个新闻源，逐条处理并立即保存。
 
-    Args:
-        need_translate: 是否需要翻译（iDaily 已经是中文，不需要翻译）
+    对每条新闻依次执行：
+      1. 保存原始文章（新文章），并立即生成原文 MP3
+      2. 翻译并保存（kagi en→zh），翻译后立即生成 zh/en MP3
+      3. 翻译并保存（idaily zh→en），检测缺失的 MP3 并立即生成
+    已完成的步骤均为幂等，重复运行可补全遗漏的翻译或 MP3。
     """
     logger = logging.getLogger(__name__)
 
@@ -99,89 +102,101 @@ def process_source(
 
     # 使用实际新闻日期作为保存目录日期
     actual_date = today_news[0].get('published', date)
+    dir_obj = Path(saver.output_dir) / source / actual_date
+    dir_obj.mkdir(parents=True, exist_ok=True)
     logger.info(f"Processing {len(today_news)} news items for {actual_date}")
 
-    # 逐条处理：检查存在 -> 立即保存 -> 翻译 -> 立即保存翻译
     saved_count = 0
 
     for item in today_news:
-        # 生成文件名用于检查
         filename = saver._generate_filename(item.get('title', ''))
+        file_path = dir_obj / f"{filename}.html"
+        en_file_path = dir_obj / f"{filename}_en.html"
+        article_exists = file_path.exists() or en_file_path.exists()
 
-        # 检查文件是否已存在
-        dir_path = os.path.join(saver.output_dir, source, actual_date)
-        os.makedirs(dir_path, exist_ok=True)
-        file_path = os.path.join(dir_path, f"{filename}.html")
-        en_file_path = os.path.join(dir_path, f"{filename}_en.html")
+        # ── 步骤1：保存原始文章（新文章），立即生成 MP3 ──────────────
+        if not article_exists:
+            try:
+                saver.save_news(item, source, actual_date)
+                saved_count += 1
+                logger.info(f"已保存: {filename}")
+            except Exception as e:
+                logger.error(f"保存失败 {filename}: {e}")
+                continue
 
-        if os.path.exists(file_path) or os.path.exists(en_file_path):
-            logger.info(f"跳过已存在: {filename}")
-            continue
+            # 立即为原始文章生成 MP3
+            if tts_gen is not None:
+                orig_lang = 'en' if need_translate else 'zh'
+                tts_gen.generate_article_audio(
+                    title=item.get('title', ''),
+                    content=item.get('content', ''),
+                    lang=orig_lang,
+                    output_path=dir_obj / f"{filename}_{orig_lang}.mp3",
+                )
+        else:
+            logger.info(f"文章已存在: {filename}")
 
-        # 立即保存原始文件
-        try:
-            saver.save_news(item, source, actual_date)
-            saved_count += 1
-            logger.info(f"已保存: {filename}")
-        except Exception as e:
-            logger.error(f"保存失败 {filename}: {e}")
-            continue
-
-        # 如果需要翻译，立即翻译并保存
+        # ── 步骤2：kagi (en→zh) 翻译，翻译后立即生成 MP3 ────────────
+        # en_file_path（{filename}_en.html）由 saver 在翻译保存时创建，
+        # 存在则说明翻译已完成，不再重复翻译。
         if translator is not None and need_translate:
-            try:
-                translated = translator.translate_news(item)
-                if translated:
-                    saver.save_news(translated, source, actual_date)
-                    logger.info(f"已保存翻译: {filename}")
-                    # 翻译完成后生成 zh/en 音频（使用 zh 标题的 stem）
-                    if tts_gen is not None:
-                        zh_stem = saver._generate_filename(translated.get('title', ''))
-                        dir_obj = Path(saver.output_dir) / source / actual_date
-                        tts_gen.generate_article_audio(
-                            title=translated.get('title', ''),
-                            content=translated.get('content', ''),
-                            lang='zh',
-                            output_path=dir_obj / f"{zh_stem}_zh.mp3",
-                        )
-                        tts_gen.generate_article_audio(
-                            title=translated.get('title_en', ''),
-                            content=translated.get('content_en', ''),
-                            lang='en',
-                            output_path=dir_obj / f"{zh_stem}_en.mp3",
-                        )
-            except Exception as e:
-                logger.error(f"翻译失败 {filename}: {e}")
+            if not en_file_path.exists():
+                try:
+                    translated = translator.translate_news(item)
+                    if translated:
+                        saver.save_news(translated, source, actual_date)
+                        logger.info(f"已保存翻译: {filename}")
+                        if tts_gen is not None:
+                            zh_stem = saver._generate_filename(translated.get('title', ''))
+                            tts_gen.generate_article_audio(
+                                title=translated.get('title', ''),
+                                content=translated.get('content', ''),
+                                lang='zh',
+                                output_path=dir_obj / f"{zh_stem}_zh.mp3",
+                            )
+                            tts_gen.generate_article_audio(
+                                title=translated.get('title_en', ''),
+                                content=translated.get('content_en', ''),
+                                lang='en',
+                                output_path=dir_obj / f"{zh_stem}_en.mp3",
+                            )
+                except Exception as e:
+                    logger.error(f"翻译失败 {filename}: {e}")
 
-        # 如果需要中文->英文翻译（iDaily）
+        # ── 步骤3：idaily (zh→en) 翻译，检测缺失 MP3 并立即生成 ──────
         if translator is not None and translate_to_en:
-            try:
-                translated = translator.translate_news_zh_to_en(item)
-                if translated:
-                    saver.save_news(translated, source, actual_date)
-                    logger.info(f"已保存英文版: {filename}")
-                    # 生成 zh/en 音频（stem 使用原始中文标题）
-                    if tts_gen is not None:
-                        zh_stem = saver._generate_filename(item.get('title', ''))
-                        dir_obj = Path(saver.output_dir) / source / actual_date
-                        tts_gen.generate_article_audio(
-                            title=item.get('title', ''),
-                            content=item.get('content', ''),
-                            lang='zh',
-                            output_path=dir_obj / f"{zh_stem}_zh.mp3",
-                        )
-                        tts_gen.generate_article_audio(
-                            title=translated.get('title_en', ''),
-                            content=translated.get('content_en', ''),
-                            lang='en',
-                            output_path=dir_obj / f"{zh_stem}_en.mp3",
-                        )
-            except Exception as e:
-                logger.error(f"翻译失败 {filename}: {e}")
+            zh_stem = filename  # idaily: zh_stem 即原始中文文件名
+            zh_mp3 = dir_obj / f"{zh_stem}_zh.mp3"
+            en_mp3 = dir_obj / f"{zh_stem}_en.mp3"
 
-    # 补全目录中已有 HTML 但缺少音频的文章（幂等，跳过已存在的 MP3）
+            # 确保 zh MP3 存在
+            if tts_gen is not None and not zh_mp3.exists():
+                tts_gen.generate_article_audio(
+                    title=item.get('title', ''),
+                    content=item.get('content', ''),
+                    lang='zh',
+                    output_path=zh_mp3,
+                )
+
+            # en MP3 缺失则翻译并生成
+            if not en_mp3.exists():
+                try:
+                    translated = translator.translate_news_zh_to_en(item)
+                    if translated:
+                        saver.save_news(translated, source, actual_date)
+                        logger.info(f"已保存英文版: {filename}")
+                        if tts_gen is not None:
+                            tts_gen.generate_article_audio(
+                                title=translated.get('title_en', ''),
+                                content=translated.get('content_en', ''),
+                                lang='en',
+                                output_path=en_mp3,
+                            )
+                except Exception as e:
+                    logger.error(f"翻译失败 {filename}: {e}")
+
+    # 兜底：补全目录中已有 HTML 但仍缺少音频的条目（幂等）
     if tts_gen is not None:
-        dir_obj = Path(saver.output_dir) / source / actual_date
         missing = tts_gen.generate_missing_for_dir(dir_obj)
         if missing > 0:
             logger.info(f"补全音频: {missing} 个")
