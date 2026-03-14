@@ -293,6 +293,9 @@
         let ttsAudio = null;
         let ttsAudioContext = null;
         const ttsUrlCache = new Map();
+        // 全局预加载并发限制：避免同时发起过多 TTS 请求拖慢服务器
+        let ttsPreloadInflight = 0;
+        const TTS_PRELOAD_MAX_CONCURRENT = 2;
         const ttsStyles = ['standard', 'gentle', 'broadcast'];
         const ttsStyleLabels = {
             standard: '标准',
@@ -409,6 +412,8 @@
         // 预加载 TTS 音频（在后台静默加载）
         async function preloadTtsAudio(article, lang, btn) {
             if (!ttsSupported) return;
+            // 全局并发限制：超出则跳过此次预加载
+            if (ttsPreloadInflight >= TTS_PRELOAD_MAX_CONCURRENT) return;
 
             const title = lang === 'en' ? (article.title_en || article.title) : article.title;
             const bodyRaw = lang === 'en' ? (article.content_en || article.content) : article.content;
@@ -423,8 +428,8 @@
             const key = lang + '::' + ttsStyle + '::' + finalText;
             if (ttsUrlCache.has(key)) return;
 
+            ttsPreloadInflight++;
             try {
-                // 显示加载中状态
                 if (btn) {
                     btn.dataset.preloading = 'true';
                     btn.style.opacity = '0.6';
@@ -432,7 +437,6 @@
 
                 await fetchTtsAudioUrl(finalText, lang);
 
-                // 加载完成，更新按钮状态
                 if (btn) {
                     btn.dataset.preloading = 'false';
                     btn.dataset.preloaded = 'true';
@@ -444,6 +448,8 @@
                     btn.dataset.preloading = 'false';
                     btn.style.opacity = '1';
                 }
+            } finally {
+                ttsPreloadInflight--;
             }
         }
 
