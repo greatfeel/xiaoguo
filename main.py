@@ -163,11 +163,12 @@ def process_source(
                 except Exception as e:
                     logger.error(f"翻译失败 {filename}: {e}")
 
-        # ── 步骤3：idaily (zh→en) 翻译，检测缺失 MP3 并立即生成 ──────
+        # ── 步骤3：idaily (zh→en) 翻译，检测缺失的 HTML/MP3 并立即生成 ──
         if translator is not None and translate_to_en:
             zh_stem = filename  # idaily: zh_stem 即原始中文文件名
             zh_mp3 = dir_obj / f"{zh_stem}_zh.mp3"
             en_mp3 = dir_obj / f"{zh_stem}_en.mp3"
+            en_html = dir_obj / f"{zh_stem}_en.html"
 
             # 确保 zh MP3 存在
             if tts_gen is not None and not zh_mp3.exists():
@@ -178,17 +179,31 @@ def process_source(
                     output_path=zh_mp3,
                 )
 
-            # en MP3 缺失则翻译并生成
-            if not en_mp3.exists():
+            # en HTML 或 en MP3 缺失则翻译并生成
+            # 注：saver.save_news 因主 HTML 已存在会提前返回，需手动写入 en HTML
+            if not en_html.exists() or not en_mp3.exists():
                 try:
                     translated = translator.translate_news_zh_to_en(item)
                     if translated:
-                        saver.save_news(translated, source, actual_date)
-                        logger.info(f"已保存英文版: {filename}")
-                        if tts_gen is not None:
+                        title_en = translated.get('title_en', '')
+                        content_en = translated.get('content_en', '')
+                        # 写入 en HTML（webapp 读取此文件避免重复调用 LLM）
+                        if title_en and content_en and not en_html.exists():
+                            en_item = {
+                                'title': title_en,
+                                'content': content_en,
+                                'link': item.get('link', ''),
+                            }
+                            en_html.write_text(
+                                saver._generate_html(en_item, source, actual_date, lang='en'),
+                                encoding='utf-8',
+                            )
+                            logger.info(f"已保存英文版: {zh_stem}_en.html")
+                        # 写入 en MP3
+                        if tts_gen is not None and not en_mp3.exists():
                             tts_gen.generate_article_audio(
-                                title=translated.get('title_en', ''),
-                                content=translated.get('content_en', ''),
+                                title=title_en,
+                                content=content_en,
                                 lang='en',
                                 output_path=en_mp3,
                             )

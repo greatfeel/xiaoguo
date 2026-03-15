@@ -79,3 +79,8 @@ https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b
 # 修改日历模块
 去掉之前的 outlook 代码，改为嵌入以下的 iframe 代码
 <iframe src="https://teamup.com/ks9pi5rqzzs133uwh3?tz=Calendar%20default&showProfileAndInfo=0&showSidepanel=1&showViewHeader=1&showAgendaDetails=0&showDateControls=1&showDateRange=1" style="width: 100%; height: 600px; border: 1px solid #cccccc" loading="lazy" frameborder="0"></iframe>
+
+# 2026-03-14-02
+# 新闻播报的问题
+- 运行新闻抓取时，如果一条新闻被抓取后，应马上生成 mp3，然后被翻译之后，也应马上生成 mp3
+- 如果发现新闻存在，检测是否存在对应的 mp3，如果没有应马上生成，然后检测是否有相应的翻译文章，如果没有立即翻译，并随后生成 mp3，如果有翻译文章，但没有mp3，则立刻生成对应的 mp3

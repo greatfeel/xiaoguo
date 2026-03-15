@@ -10,6 +10,7 @@ import asyncio
 import sqlite3
 import logging
 import random
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -233,40 +234,59 @@ def _write_english_cache(zh_file: Path, article_en: dict, source: str, date: str
 
 
 def _try_translate_idaily_to_en(dir_path: Path, article: dict, date: str) -> dict:
-    """为 iDaily 中文文章补齐英文内容。"""
+    """为 iDaily 中文文章补齐英文内容。
+
+    如果 _en.html 磁盘缓存存在，直接从文件读取（快速路径）。
+    如果不存在，立即返回中文版本，同时在后台线程中翻译并写入缓存。
+    下次请求时缓存已存在，自动切换到快速路径。
+    """
     if article.get("title_en") and article.get("content_en"):
         return article
 
-    translator = _get_translator()
-    if translator is None:
-        return article
+    # 快速路径：_en.html 已在磁盘，直接解析（无 LLM 调用）
+    zh_filename = article.get("filename")
+    if zh_filename:
+        en_file = dir_path / zh_filename
+        en_file = en_file.with_name(f"{en_file.stem}_en.html")
+        if en_file.exists():
+            en_article = _parse_news_html(en_file)
+            if en_article:
+                article["title_en"] = en_article.get("title", "")
+                article["content_en"] = en_article.get("content", "")
+                return article
 
-    try:
-        translated = translator.translate_news_zh_to_en({
-            "title": article.get("title", ""),
-            "content": article.get("content", ""),
-            "description": article.get("content", ""),
-            "link": article.get("link", ""),
-        })
+    # 慢速路径：_en.html 不存在，后台翻译，本次请求不阻塞
+    def _bg_translate():
+        translator = _get_translator()
+        if translator is None:
+            return
+        try:
+            translated = translator.translate_news_zh_to_en({
+                "title": article.get("title", ""),
+                "content": article.get("content", ""),
+                "description": article.get("content", ""),
+                "link": article.get("link", ""),
+            })
+            title_en = translated.get("title_en", "")
+            content_en = translated.get("content_en", "")
+            if not title_en or not content_en:
+                return
+            # 写入磁盘缓存，下次请求走快速路径
+            if zh_filename:
+                zh_file = dir_path / zh_filename
+                if zh_file.exists():
+                    _write_english_cache(
+                        zh_file,
+                        {**article, "title_en": title_en, "content_en": content_en},
+                        "idaily",
+                        date,
+                    )
+                    logger.info("后台翻译完成并缓存: %s_en.html", zh_file.stem)
+        except Exception as exc:
+            logger.warning("iDaily 后台翻译失败: %s", exc)
 
-        title_en = translated.get("title_en", "")
-        content_en = translated.get("content_en", "")
-        if not title_en or not content_en:
-            return article
-
-        article["title_en"] = title_en
-        article["content_en"] = content_en
-
-        zh_filename = article.get("filename")
-        if zh_filename:
-            zh_file = dir_path / zh_filename
-            if zh_file.exists():
-                _write_english_cache(zh_file, article, "idaily", date)
-
-        return article
-    except Exception as exc:
-        logger.warning("iDaily 英文翻译失败: %s", exc)
-        return article
+    threading.Thread(target=_bg_translate, daemon=True).start()
+    return article  # 本次请求返回中文版，下次请求有英文
 
 
 def _date_has_news(date: str) -> bool:
