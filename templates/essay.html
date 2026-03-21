@@ -323,6 +323,72 @@
             color: #667eea;
             font-weight: 500;
         }
+        /* AI 多模型大纲结果区 */
+        .ai-results-container {
+            background: white;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+        }
+        .ai-results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #eee;
+        }
+        .ai-results-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #333;
+        }
+        .ai-collapse-btn {
+            font-size: 12px;
+            color: #667eea;
+            background: none;
+            border: 1px solid #667eea;
+            padding: 4px 12px;
+            border-radius: 16px;
+            cursor: pointer;
+            -webkit-appearance: none;
+        }
+        .ai-models-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        @media (max-width: 500px) {
+            .ai-models-grid { grid-template-columns: 1fr; }
+        }
+        .ai-model-card {
+            border: 1px solid #e8ecf0;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .ai-model-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 14px;
+        }
+        .ai-model-body {
+            padding: 12px 14px;
+            font-size: 13px;
+            color: #555;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            min-height: 60px;
+        }
+        .ai-model-loading {
+            color: #aaa;
+            font-style: italic;
+        }
+        .ai-model-error {
+            color: #e74c3c;
+        }
         /* 错误提示 */
         .error-toast {
             position: fixed;
@@ -365,6 +431,32 @@
             <div id="questionContent" style="display:none;">
                 <div class="question-title" id="questionTitle"></div>
                 <div class="question-content" id="questionBody"></div>
+            </div>
+        </div>
+
+        <!-- AI 多模型大纲结果（隐藏，生成后显示） -->
+        <div class="ai-results-container" id="aiResultsContainer" style="display:none;">
+            <div class="ai-results-header">
+                <span class="ai-results-title">🤖 AI 大纲（多模型对比）</span>
+                <button class="ai-collapse-btn" onclick="document.getElementById('aiResultsContainer').style.display='none'">收起 ▲</button>
+            </div>
+            <div class="ai-models-grid">
+                <div class="ai-model-card">
+                    <div class="ai-model-header">阿里千问</div>
+                    <div class="ai-model-body ai-model-loading" id="ai-result-qwen">⏳ 生成中...</div>
+                </div>
+                <div class="ai-model-card">
+                    <div class="ai-model-header">智谱 GLM</div>
+                    <div class="ai-model-body ai-model-loading" id="ai-result-glm">⏳ 生成中...</div>
+                </div>
+                <div class="ai-model-card">
+                    <div class="ai-model-header">月之暗面 KIMI</div>
+                    <div class="ai-model-body ai-model-loading" id="ai-result-kimi">⏳ 生成中...</div>
+                </div>
+                <div class="ai-model-card">
+                    <div class="ai-model-header">MiniMax</div>
+                    <div class="ai-model-body ai-model-loading" id="ai-result-minimax">⏳ 生成中...</div>
+                </div>
             </div>
         </div>
 
@@ -624,7 +716,15 @@
             document.getElementById('resultCard').scrollIntoView({ behavior: 'smooth' });
         }
 
-        // AI 生成大纲
+        // 模型 ID → DOM 元素 ID 映射
+        const MODEL_ELEMENT_IDS = {
+            'qwen3-max-2026-01-23': 'ai-result-qwen',
+            'glm-5':                'ai-result-glm',
+            'kimi-k2.5':            'ai-result-kimi',
+            'MiniMax-M2.5':         'ai-result-minimax',
+        };
+
+        // AI 生成大纲（多模型并行）
         async function generateAIOutline() {
             if (!currentQuestion) {
                 showError('题目加载中，请稍候');
@@ -632,15 +732,21 @@
             }
 
             const aiBtn = document.getElementById('aiGenerateBtn');
-            const loadingOverlay = document.getElementById('loadingOverlay');
-            const loadingText = loadingOverlay.querySelector('.loading-text');
+            const container = document.getElementById('aiResultsContainer');
+
+            // 重置所有模型区为加载状态
+            Object.values(MODEL_ELEMENT_IDS).forEach(id => {
+                const el = document.getElementById(id);
+                el.textContent = '⏳ 生成中...';
+                el.className = 'ai-model-body ai-model-loading';
+            });
 
             aiBtn.disabled = true;
-            loadingText.textContent = 'AI 正在生成大纲...';
-            loadingOverlay.classList.add('visible');
+            container.style.display = 'block';
+            container.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
             try {
-                const res = await fetch('/api/essay/generate-outline', {
+                const res = await fetch('/api/essay/generate-outline-multi', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -655,19 +761,28 @@
                     throw new Error(data.error);
                 }
 
-                // 填充生成的大纲到输入框
-                const textarea = document.getElementById('outlineInput');
-                textarea.value = data.outline;
-
-                // 滚动到输入框
-                textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                data.results.forEach(result => {
+                    const elId = MODEL_ELEMENT_IDS[result.model];
+                    if (!elId) return;
+                    const el = document.getElementById(elId);
+                    if (result.error) {
+                        el.textContent = '❌ 生成失败：' + result.error;
+                        el.className = 'ai-model-body ai-model-error';
+                    } else {
+                        el.textContent = result.outline;
+                        el.className = 'ai-model-body';
+                    }
+                });
 
             } catch (err) {
                 showError(err.message || '大纲生成失败，请重试');
+                Object.values(MODEL_ELEMENT_IDS).forEach(id => {
+                    const el = document.getElementById(id);
+                    el.textContent = '❌ 请求失败，请重试';
+                    el.className = 'ai-model-body ai-model-error';
+                });
             } finally {
                 aiBtn.disabled = false;
-                loadingOverlay.classList.remove('visible');
-                loadingText.textContent = 'AI 正在评分...';
             }
         }
 
