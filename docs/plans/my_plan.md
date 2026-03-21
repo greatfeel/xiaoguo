@@ -84,3 +84,16 @@ https://outlook.live.com/owa/calendar/26555a2a-43dc-4283-a125-ed904dea08e1/e0a7b
 # 新闻播报的问题
 - 运行新闻抓取时，如果一条新闻被抓取后，应马上生成 mp3，然后被翻译之后，也应马上生成 mp3
 - 如果发现新闻存在，检测是否存在对应的 mp3，如果没有应马上生成，然后检测是否有相应的翻译文章，如果没有立即翻译，并随后生成 mp3，如果有翻译文章，但没有mp3，则立刻生成对应的 mp3
+
+# 2026-03-21-01
+# 模型设置
+- 增加多个模型的设置，模型列表为qwen3.5-plus、qwen3-max-2026-01-23、qwen3-coder-next、qwen3-coder-plus、glm-5、glm-4.7、kimi-k2.5、MiniMax-M2.5
+- 默认为kimi-k2.5
+
+# 作文模块改进
+- “AI 生成“ 的时候分别用qwen3-max-2026-01-23、glm-5、kimi-k2.5、MiniMax-M2.5生成不同的结果
+- “AI 生成“ 的结果不要填入输入框了，在输入框上方生成，且按照每个模型分区展示，每个分区对应关系如下：
+qwen3-max-2026-01-23：阿里千问
+glm-5：智谱 GLM
+kimi-k2.5：月之暗面 KIMI
+MiniMax-M2.5：MiniMax

@@ -42,6 +42,30 @@ CONFIG_PATH = Path(__file__).parent / "config.yaml"
 ESSAY_XLS_PATH = Path(__file__).parent / "高考作文题目汇总.xls"
 ESSAY_JSON_PATH = Path(__file__).parent / "高考作文题目汇总.json"
 
+# 用户设置文件路径
+SETTINGS_PATH = Path(__file__).parent / "settings.json"
+
+# 可选模型列表
+AVAILABLE_MODELS = [
+    "qwen3.5-plus",
+    "qwen3-max-2026-01-23",
+    "qwen3-coder-next",
+    "qwen3-coder-plus",
+    "glm-5",
+    "glm-4.7",
+    "kimi-k2.5",
+    "MiniMax-M2.5",
+]
+DEFAULT_MODEL = "kimi-k2.5"
+
+# 作文 AI 生成使用的四个模型（名称映射）
+ESSAY_AI_MODELS = [
+    {"model": "qwen3-max-2026-01-23", "name": "阿里千问"},
+    {"model": "glm-5",                "name": "智谱 GLM"},
+    {"model": "kimi-k2.5",            "name": "月之暗面 KIMI"},
+    {"model": "MiniMax-M2.5",         "name": "MiniMax"},
+]
+
 
 def _load_config() -> dict:
     """加载配置文件并替换环境变量。"""
@@ -57,6 +81,23 @@ def _load_config() -> dict:
     for key, value in os.environ.items():
         config_str = config_str.replace(f"${{{key}}}", value)
     return yaml.safe_load(config_str) or {}
+
+
+def _load_settings() -> dict:
+    """加载用户设置（如选定的 AI 模型）。"""
+    if SETTINGS_PATH.exists():
+        try:
+            with open(SETTINGS_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"model": DEFAULT_MODEL}
+
+
+def _save_settings(settings: dict) -> None:
+    """保存用户设置到 settings.json。"""
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
 # 初始化环境变量与配置
@@ -819,14 +860,47 @@ def _get_essay_questions(force_reload: bool = False) -> list[dict]:
     return _essay_questions
 
 
-def _get_translator():
-    """获取翻译器实例，用于调用大模型。"""
-    config = _load_config()
+def _get_translator(model: str = None) -> Optional[Translator]:
+    """获取翻译器实例，用于调用大模型。
+
+    Args:
+        model: 指定模型名称；为 None 时优先使用 settings.json 中的用户设置，
+               再回落到 config.yaml 中的 ANTHROPIC_MODEL。
+    """
+    config = dict(_load_config())
+    if model:
+        config["ANTHROPIC_MODEL"] = model
+    elif not config.get("ANTHROPIC_MODEL"):
+        config["ANTHROPIC_MODEL"] = _load_settings().get("model", DEFAULT_MODEL)
     try:
         return Translator(config)
     except Exception as exc:
         logger.error(f"Translator init failed: {exc}")
         return None
+
+
+@app.route("/api/settings/model", methods=["GET", "POST"])
+def api_settings_model():
+    """获取或设置当前 AI 模型。"""
+    if request.method == "GET":
+        settings = _load_settings()
+        return jsonify({
+            "model": settings.get("model", DEFAULT_MODEL),
+            "available": AVAILABLE_MODELS,
+        })
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "无效请求"}), 400
+    model = data.get("model")
+    if model not in AVAILABLE_MODELS:
+        return jsonify({"error": "无效的模型"}), 400
+
+    settings = _load_settings()
+    settings["model"] = model
+    _save_settings(settings)
+    logger.info("用户切换模型: %s", model)
+    return jsonify({"model": model, "message": "模型已更新"})
 
 
 @app.route("/essay")
@@ -996,6 +1070,67 @@ def api_essay_generate_outline():
     except Exception as exc:
         logger.error(f"大纲生成失败: {exc}")
         return jsonify({"error": f"大纲生成失败: {str(exc)}"}), 500
+
+
+@app.route("/api/essay/generate-outline-multi", methods=["POST"])
+def api_essay_generate_outline_multi():
+    """并行调用多个模型生成作文大纲，返回各模型结果。"""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "无效请求"}), 400
+
+    question_title = data.get("question_title", "")
+    question_content = data.get("question_content", "")
+
+    if not question_title:
+        return jsonify({"error": "缺少题目信息"}), 400
+
+    prompt = ESSAY_GENERATE_PROMPT.format(
+        question_title=question_title,
+        question_content=question_content
+    )
+
+    # 各模型结果存入字典，key 为模型 ID
+    model_results: dict = {}
+
+    def call_model(model_id: str) -> None:
+        try:
+            translator = _get_translator(model=model_id)
+            if not translator:
+                model_results[model_id] = {"error": "模型不可用"}
+                return
+            message = translator.client.messages.create(
+                model=translator.model,
+                max_tokens=2048,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            model_results[model_id] = {
+                "outline": translator._get_text_from_response(message).strip()
+            }
+        except Exception as exc:
+            logger.error("多模型大纲生成失败 [%s]: %s", model_id, exc)
+            model_results[model_id] = {"error": str(exc)}
+
+    threads = [
+        threading.Thread(target=call_model, args=(m["model"],))
+        for m in ESSAY_AI_MODELS
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    return jsonify({
+        "results": [
+            {
+                "model": m["model"],
+                "name": m["name"],
+                "outline": model_results.get(m["model"], {}).get("outline", ""),
+                "error": model_results.get(m["model"], {}).get("error"),
+            }
+            for m in ESSAY_AI_MODELS
+        ]
+    })
 
 
 # ── 启动 ──────────────────────────────────────────────

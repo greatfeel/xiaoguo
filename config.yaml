@@ -2,7 +2,7 @@
 
 # Anthropic API Configuration
 # 注意：可以从环境变量读取，或在此处直接配置
-ANTHROPIC_MODEL: "MiniMax-M2.5"
+ANTHROPIC_MODEL: "kimi-k2.5"
 ANTHROPIC_BASE_URL: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
 ANTHROPIC_AUTH_TOKEN: "${ANTHROPIC_API_KEY}"  # 支持从环境变量读取
 
